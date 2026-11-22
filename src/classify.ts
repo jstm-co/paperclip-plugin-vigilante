@@ -83,6 +83,25 @@ export function stopperIdOf(issue: ScanIssue): string | null {
   return issue.id;
 }
 
+/**
+ * Follows the chain to its real end. The host's "terminal" blocker can itself be
+ * a blocked issue that waits on another one (a plan created as a chain), so the
+ * pointer is followed until it stops moving. A cycle ends at the first repeat.
+ */
+export function rootStopperId(issue: ScanIssue, byId: ReadonlyMap<string, ScanIssue>): string | null {
+  let current = stopperIdOf(issue);
+  if (current === null) return null;
+  const seen = new Set<string>([issue.id]);
+  while (!seen.has(current)) {
+    seen.add(current);
+    const next = byId.get(current);
+    const nextTarget = next ? stopperIdOf(next) : null;
+    if (nextTarget === null || nextTarget === current) break;
+    current = nextTarget;
+  }
+  return current;
+}
+
 export function classifyIssue(issue: ScanIssue): { kind: StopperKind; wouldDo: WouldDo; reason: string | null } {
   const hasAgent = Boolean(issue.assigneeAgentId);
   const hasUser = Boolean(issue.assigneeUserId);
@@ -113,7 +132,7 @@ export function classify(issues: ScanIssue[], now: number, options: ClassifyOpti
   const stops = new Map<string, number>();
 
   for (const issue of issues) {
-    const target = stopperIdOf(issue);
+    const target = rootStopperId(issue, byId);
     if (target === null) continue;
     stops.set(target, (stops.get(target) ?? 0) + (target === issue.id ? 0 : 1));
   }

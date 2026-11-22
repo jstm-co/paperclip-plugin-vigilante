@@ -203,3 +203,29 @@ describe("classify", () => {
     expect(result[0]).toMatchObject({ issueId: "C", kind: "waiting_third_party", reason: "Needs the invoice" });
   });
 });
+
+describe("chains whose host terminal is itself blocked", () => {
+  it("follows the pointer to the real end of the chain", () => {
+    // 4 waits on 3, 3 on 2, 2 on the backlog issue 1; the host only reports the next hop.
+    const issues = [
+      issue("1", { status: "backlog" }),
+      blockedOn("2", "1"),
+      blockedOn("3", "2"),
+      blockedOn("4", "3"),
+    ];
+    const result = classify(issues, NOW);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ issueId: "1", stops: 3, kind: "backlog_unowned" });
+  });
+
+  it("terminates on a cycle and reports each issue of the loop once", () => {
+    const result = classify([blockedOn("1", "2"), blockedOn("2", "1")], NOW);
+    expect(result.map((s) => s.issueId).sort()).toEqual(["1", "2"]);
+  });
+
+  it("keeps an unknown end when the chain leaves the list", () => {
+    const result = classify([blockedOn("2", "9"), blockedOn("3", "2")], NOW);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ issueId: "9", stops: 2, kind: "unknown" });
+  });
+});
