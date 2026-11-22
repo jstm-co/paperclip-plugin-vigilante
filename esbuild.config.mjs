@@ -8,7 +8,6 @@ const build = getBuildInfo();
 const define = {
   ...presets.esbuild.manifest.define,
   __VIGILANTE_VERSION__: JSON.stringify(build.version),
-  __VIGILANTE_COMMIT__: JSON.stringify(build.commit),
 };
 
 const workerCtx = await esbuild.context(presets.esbuild.worker);

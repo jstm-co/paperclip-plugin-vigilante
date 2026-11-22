@@ -22,6 +22,8 @@ export interface ScanIssue {
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
   updatedAt: string;
+  /** Last activity including comments, when the host row has it. Preferred over `updatedAt`. */
+  lastActivityAt?: string | null;
   blockerAttention?: {
     state?: string | null;
     reason?: string | null;
@@ -45,7 +47,7 @@ export interface Stopper {
   issue: ScanIssue | null;
   /** How many OTHER issues hang from this one. */
   stops: number;
-  /** Milliseconds since the last update; `null` when unknown. */
+  /** Milliseconds since the last activity (`lastActivityAt`, else `updatedAt`); `null` when unknown. */
   quietMs: number | null;
   kind: StopperKind;
   wouldDo: WouldDo;
@@ -145,7 +147,7 @@ export function classify(issues: ScanIssue[], now: number, options: ClassifyOpti
       continue;
     }
     if (CLOSED.has(issue.status) || issue.activeRun) continue;
-    const updated = Date.parse(issue.updatedAt);
+    const updated = Date.parse(issue.lastActivityAt || issue.updatedAt);
     const quiet = Number.isNaN(updated) ? null : Math.max(0, now - updated);
     if (quiet !== null && quiet < quietMs) continue;
     result.push({ issueId, issue, stops: count, quietMs: quiet, ...classifyIssue(issue) });

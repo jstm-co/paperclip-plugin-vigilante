@@ -10,6 +10,8 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { nextReleaseVersion } from "./version.mjs";
 
 /** Paths that do not change the published plugin. */
@@ -41,6 +43,22 @@ function npmView(...args) {
   return execFileSync("npm", ["view", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/** True when `npm view` failed because the package (or version) does not exist on the registry. */
+export function isNotFound(error) {
+  const text = `${error?.stderr ?? ""}\n${error?.stdout ?? ""}\n${error?.message ?? ""}`;
+  return /\bE404\b|404 Not Found/i.test(text);
+}
+
+/** Latest published version, or `null` when the package was never published. */
+function latestVersion(name) {
+  try {
+    return npmView(name, "version");
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+}
+
 function publishedVersions(name) {
   const versions = JSON.parse(npmView(name, "versions", "--json"));
   return Array.isArray(versions) ? versions : [versions];
@@ -69,7 +87,14 @@ function checkPr(base, head) {
 
 function checkMain() {
   const { name } = pkg();
-  const baseVersion = npmView(name, "version");
+  const baseVersion = latestVersion(name);
+  if (baseVersion === null) {
+    // Never published (npm E404): this is the first release, sequence 0 of today.
+    const version = nextReleaseVersion([]);
+    output({ publish: "true", version });
+    summary([`First release: ${name} is not on npm yet. Publishing ${name}@${version}.`]);
+    return;
+  }
   const baseTag = `v${baseVersion}`;
   try {
     git("rev-parse", "--verify", `${baseTag}^{commit}`);
@@ -89,7 +114,10 @@ function checkMain() {
   summary([`Publishing ${name}@${version} (previous: ${baseVersion}).`, "", ...list(files)]);
 }
 
-const [command, ...args] = process.argv.slice(2);
-if (command === "pr") checkPr(args[0], args[1]);
-else if (command === "main") checkMain();
-else fail(["Usage: node scripts/release.mjs pr <base> <head> | main"]);
+// Run only as a script, so tests can import the helpers.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const [command, ...args] = process.argv.slice(2);
+  if (command === "pr") checkPr(args[0], args[1]);
+  else if (command === "main") checkMain();
+  else fail(["Usage: node scripts/release.mjs pr <base> <head> | main"]);
+}

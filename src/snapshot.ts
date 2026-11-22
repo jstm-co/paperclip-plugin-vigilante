@@ -1,36 +1,16 @@
-// Pure helpers to build the stored snapshot and keep `firstSeenAt` across scans.
+// Pure helpers to build the per-company stored record and keep `firstSeenAt` across scans.
 import type { Stopper } from "./classify.js";
-import type { CompanySnapshot, ScanError, Snapshot, StopperView } from "./shared.js";
+import type { CompanySnapshot, CompanyState, ScanError, StopperView } from "./shared.js";
 
-/** `firstSeen[issueId]`: when the watcher first saw it stuck, and in which company. */
-export type FirstSeen = Record<string, { at: string; companyId: string }>;
-
-export interface CompanyScan {
-  id: string;
-  name: string;
-  issuePrefix: string | null;
-  /** `null` when the company could not be scanned. */
-  stoppers: Stopper[] | null;
-}
+export const EMPTY_STATE: CompanyState = { company: null, firstSeen: {}, errors: [] };
 
 /**
- * Keeps the entry of every stopper still present, adds new ones with `nowIso`,
- * drops those that disappeared. Entries of companies that failed to scan are
- * kept untouched: a failed scan says nothing about them.
+ * Keeps the entry of every issue still stuck, adds new ones with `nowIso` and
+ * drops those that disappeared.
  */
-export function mergeFirstSeen(
-  previous: FirstSeen,
-  current: Array<{ issueId: string; companyId: string }>,
-  failedCompanyIds: ReadonlySet<string>,
-  nowIso: string,
-): FirstSeen {
-  const next: FirstSeen = {};
-  for (const [issueId, entry] of Object.entries(previous)) {
-    if (failedCompanyIds.has(entry.companyId)) next[issueId] = entry;
-  }
-  for (const { issueId, companyId } of current) {
-    next[issueId] = previous[issueId] ?? { at: nowIso, companyId };
-  }
+export function mergeFirstSeen(previous: Record<string, string>, currentIds: readonly string[], nowIso: string): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const id of currentIds) next[id] = previous[id] ?? nowIso;
   return next;
 }
 
@@ -49,46 +29,77 @@ export function toStopperView(stopper: Stopper, firstSeenAt: string): StopperVie
   };
 }
 
-export interface BuiltSnapshot {
-  snapshot: Snapshot;
-  firstSeen: FirstSeen;
+export interface CompanyMeta {
+  id: string;
+  name: string;
+  issuePrefix: string | null;
 }
 
-export function buildSnapshot(
-  scans: CompanyScan[],
-  errors: ScanError[],
-  previous: FirstSeen,
-  scannedAt: Date,
-  durationMs: number,
-): BuiltSnapshot {
+/** The record after a scan of the company finished well. */
+export function buildState(meta: CompanyMeta, stoppers: Stopper[], previous: CompanyState, scannedAt: Date, durationMs: number): CompanyState {
   const nowIso = scannedAt.toISOString();
-  const failed = new Set(scans.filter((scan) => scan.stoppers === null).map((scan) => scan.id));
-  for (const error of errors) if (error.companyId) failed.add(error.companyId);
-  const current = scans.flatMap((scan) => (scan.stoppers ?? []).map((s) => ({ issueId: s.issueId, companyId: scan.id })));
-  const firstSeen = mergeFirstSeen(previous, current, failed, nowIso);
-  const companies: CompanySnapshot[] = scans.map((scan) => ({
-    id: scan.id,
-    name: scan.name,
-    issuePrefix: scan.issuePrefix,
-    stoppers: (scan.stoppers ?? []).map((s) => toStopperView(s, firstSeen[s.issueId]!.at)),
-  }));
-  return { snapshot: { scannedAt: nowIso, durationMs, companies, errors }, firstSeen };
+  const firstSeen = mergeFirstSeen(
+    previous.firstSeen,
+    stoppers.map((s) => s.issueId),
+    nowIso,
+  );
+  const company: CompanySnapshot = {
+    ...meta,
+    scannedAt: nowIso,
+    durationMs,
+    stoppers: stoppers.map((s) => toStopperView(s, firstSeen[s.issueId]!)),
+  };
+  return { company, firstSeen, errors: [] };
 }
 
-/** Defensive read of what `ctx.state` returned. */
-export function parseStored(value: unknown): { snapshot: Snapshot | null; firstSeen: FirstSeen } {
-  if (!value || typeof value !== "object") return { snapshot: null, firstSeen: {} };
-  const raw = value as { snapshot?: unknown; firstSeen?: unknown };
-  const snapshot =
-    raw.snapshot && typeof raw.snapshot === "object" && Array.isArray((raw.snapshot as Snapshot).companies)
-      ? (raw.snapshot as Snapshot)
-      : null;
-  const firstSeen: FirstSeen = {};
-  if (raw.firstSeen && typeof raw.firstSeen === "object") {
-    for (const [id, entry] of Object.entries(raw.firstSeen as Record<string, unknown>)) {
-      const e = entry as { at?: unknown; companyId?: unknown } | null;
-      if (e && typeof e.at === "string" && typeof e.companyId === "string") firstSeen[id] = { at: e.at, companyId: e.companyId };
+/** The record after a failed scan: everything seen before is kept, only the errors change. */
+export function failedState(previous: CompanyState, error: ScanError): CompanyState {
+  return { company: previous.company, firstSeen: previous.firstSeen, errors: [error] };
+}
+
+function parseStopper(value: unknown): StopperView | null {
+  if (!value || typeof value !== "object") return null;
+  const s = value as Partial<StopperView>;
+  if (typeof s.issueId !== "string" || typeof s.kind !== "string" || typeof s.firstSeenAt !== "string") return null;
+  return s as StopperView;
+}
+
+function parseError(value: unknown): ScanError | null {
+  if (!value || typeof value !== "object") return null;
+  const e = value as Partial<ScanError>;
+  if (typeof e.message !== "string") return null;
+  return {
+    companyId: typeof e.companyId === "string" ? e.companyId : null,
+    companyName: typeof e.companyName === "string" ? e.companyName : null,
+    message: e.message,
+  };
+}
+
+/** Defensive read of what `ctx.state` returned: lists are always arrays. */
+export function parseState(value: unknown): CompanyState {
+  if (!value || typeof value !== "object") return { company: null, firstSeen: {}, errors: [] };
+  const raw = value as { company?: unknown; firstSeen?: unknown; errors?: unknown };
+
+  let company: CompanySnapshot | null = null;
+  if (raw.company && typeof raw.company === "object") {
+    const c = raw.company as Partial<CompanySnapshot>;
+    if (typeof c.id === "string") {
+      company = {
+        id: c.id,
+        name: typeof c.name === "string" ? c.name : c.id,
+        issuePrefix: typeof c.issuePrefix === "string" ? c.issuePrefix : null,
+        scannedAt: typeof c.scannedAt === "string" ? c.scannedAt : "",
+        durationMs: typeof c.durationMs === "number" ? c.durationMs : 0,
+        stoppers: Array.isArray(c.stoppers) ? c.stoppers.map(parseStopper).filter((s): s is StopperView => s !== null) : [],
+      };
     }
   }
-  return { snapshot, firstSeen };
+
+  const firstSeen: Record<string, string> = {};
+  if (raw.firstSeen && typeof raw.firstSeen === "object" && !Array.isArray(raw.firstSeen)) {
+    for (const [id, at] of Object.entries(raw.firstSeen as Record<string, unknown>)) if (typeof at === "string") firstSeen[id] = at;
+  }
+
+  const errors = Array.isArray(raw.errors) ? raw.errors.map(parseError).filter((e): e is ScanError => e !== null) : [];
+  return { company, firstSeen, errors };
 }

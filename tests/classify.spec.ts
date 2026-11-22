@@ -229,3 +229,17 @@ describe("chains whose host terminal is itself blocked", () => {
     expect(result[0]).toMatchObject({ issueId: "9", stops: 2, kind: "unknown" });
   });
 });
+
+describe("quiet threshold", () => {
+  const stopperRow = (over: Partial<ScanIssue>) => issue("9", { status: "backlog", ...over });
+  const run = (stopper: ScanIssue) => classify([blockedOn("1", "9"), stopper], NOW).map((s) => s.issueId);
+
+  it("uses lastActivityAt when present: a recent comment keeps the stopper out", () => {
+    expect(run(stopperRow({ updatedAt: ago(48), lastActivityAt: ago(1) }))).toEqual([]);
+  });
+
+  it("falls back to updatedAt without lastActivityAt", () => {
+    expect(run(stopperRow({ updatedAt: ago(48) }))).toEqual(["9"]);
+    expect(run(stopperRow({ updatedAt: ago(48), lastActivityAt: null }))).toEqual(["9"]);
+  });
+});

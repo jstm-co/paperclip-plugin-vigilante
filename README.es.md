@@ -17,15 +17,15 @@ Vigilante recorre las tareas abiertas de cada empresa, sigue cada tarea bloquead
 
 ## Qué hace
 
-Cada 15 minutos (y a pedido con **Escanear ahora**):
+Cada 15 minutos en cada empresa que tenga el interruptor por empresa **encendido** (ver [Interruptor por empresa](#interruptor-por-empresa)), y a pedido con **Escanear ahora** en la empresa que estás mirando:
 
-1. Lista las empresas y sus tareas abiertas (`backlog`, `todo`, `in_progress`, `in_review`, `blocked`).
+1. Lista las tareas abiertas de la empresa (`backlog`, `todo`, `in_progress`, `in_review`, `blocked`).
 2. Para cada tarea bloqueada cuya atención de bloqueo es `needs_attention`, busca la que frena: el bloqueador terminal si tiene bloqueadores sin resolver, o la propia tarea.
 3. Ignora las que se mueven: con una ejecución activa, actualizadas en las últimas 24 horas, o `done` / `cancelled`.
 4. Clasifica cada una y dice qué haría la versión 2.
-5. Guarda una instantánea (estado del plugin, alcance instancia) que muestra la página **Vigilante**. También recuerda desde cuándo la ve atascada.
+5. Guarda un registro por empresa (estado del plugin, alcance empresa) que muestra la página **Vigilante**. También recuerda desde cuándo la ve atascada. Si el escaneo de una empresa falla, conserva su registro y su historial anteriores.
 
-La página muestra, por empresa: la tarea que frena (con enlace), su tipo, hace cuánto está quieta, cuántas tareas frena, qué haría el vigilante y el texto del motivo si lo hay. La interfaz sigue el idioma del navegador: español por defecto, inglés si el navegador está en inglés. Un aviso dice que no se cambia nada.
+La página muestra la empresa en la que estás: la tarea que frena (con enlace), su tipo, hace cuánto está quieta, cuántas tareas frena, qué haría el vigilante y el texto del motivo si lo hay. La interfaz sigue el idioma del navegador: español por defecto, inglés si el navegador está en inglés. Un aviso dice que no se cambia nada.
 
 ## Tipos
 
@@ -36,17 +36,26 @@ Se evalúan en este orden; gana el primero que calza.
 | `waiting_person` | Asignada a una persona (y a ningún agente) | nada: Paperclip ya le avisa a la persona |
 | `backlog_unowned` | `backlog`, sin asignar | informar: alguien debe asignarla |
 | `backlog_assigned` | `backlog`, con un agente | pasarla a `todo` |
-| `waiting_third_party` | `blocked` con un texto de acción de desbloqueo, o una acción de recuperación `deliberate_wait_without_target` | informar, con el texto del motivo |
-| `gave_up` | `blocked` con una acción de recuperación `stranded_*` activa | despertar al responsable |
+| `waiting_third_party` | `blocked` con un texto de acción de desbloqueo (la acción de recuperación `deliberate_wait_without_target` también cuenta, pero solo cuando el host la expone a los plugins) | informar, con el texto del motivo |
+| `gave_up` | `blocked` con una acción de recuperación `stranded_*` activa. **Solo cuando el host expone su estado de recuperación a los plugins; hoy esas tareas salen como `blocked_unexplained`.** | despertar al responsable |
 | `blocked_unexplained` | `blocked`, con agente, sin bloqueadores sin resolver y sin explicación | despertar al responsable |
 | `other` | cualquier otra quieta por demasiado tiempo (`todo`, `in_progress`, `in_review`...) | informar |
 | `unknown` | la tarea que frena no está en la lista de abiertas | informar (solo se conoce el id) |
 
 La lista va ordenada por cuántas tareas frena y, después, por cuánto lleva quieta.
 
+## Interruptor por empresa
+
+El job de cada 15 minutos corre sin alcance de empresa, así que Paperclip solo le deja tocar las empresas donde el plugin tiene una configuración guardada. Por eso el plugin declara un ajuste por empresa, **Escanear esta empresa cada 15 minutos** (`enabled`, apagado por defecto):
+
+- **Encendido:** el escaneo programado cubre la empresa.
+- **Apagado (o nunca guardado):** el escaneo programado la salta. El botón **Escanear ahora** de la página sigue funcionando para la empresa que estás mirando; reescanea solo esa y no toca los datos de las demás.
+
+Guarda el ajuste en cada empresa que quieras cubrir (el host guarda una configuración por empresa).
+
 ## Requisitos
 
-- Paperclip `2026.824.1` o compatible.
+- Desarrollado contra el SDK de plugins `2026.824.1`; comportamiento verificado leyendo el host `2026.1117.0`; aún no probado en una instancia en vivo.
 - Acceso de board a la instancia. En modo `local_trusted` cualquier proceso local lo tiene; en modo `authenticated`, inicia sesión antes con `npx paperclipai auth login`.
 - Para instalar desde npm: npm en la máquina donde corre Paperclip. Para instalar desde el código: Node.js 20 o superior y npm.
 
@@ -72,7 +81,7 @@ npx paperclipai plugin install "$PWD"
 npx paperclipai plugin list        # jstm.vigilante, status=ready
 ```
 
-Si tu instancia no está en la dirección por defecto, agrega `--api-base <url>` a los comandos de `paperclipai`. Luego recarga Paperclip: "Vigilante" aparece en el menú lateral. El espacio Coordinator, que es el que Paperclip trae por defecto, no dibuja los enlaces de plugins en el menú lateral; abre la página en `/<prefijo-de-empresa>/vigilante`.
+Si tu instancia no está en la dirección por defecto, agrega `--api-base <url>` a los comandos de `paperclipai`. Luego recarga Paperclip: "Vigilante" aparece en la barra de arriba (el espacio Coordinator, que es el que Paperclip trae por defecto, no dibuja los enlaces de plugins en el menú lateral) y en el menú lateral donde se dibuja. También puedes abrir `/<prefijo-de-empresa>/vigilante`. Después enciende el interruptor por empresa.
 
 ## Actualizar y desinstalar
 
@@ -88,11 +97,11 @@ npx paperclipai plugin uninstall jstm.vigilante --force    # borra todo
 
 | Permiso | Para qué |
 |---|---|
-| `companies.read` | Listar las empresas de la instancia. |
-| `issues.read` | Leer las tareas abiertas de cada empresa. |
+| `companies.read` | Leer el nombre y el prefijo de cada empresa escaneada. |
+| `issues.read` | Leer las tareas abiertas de cada empresa escaneada. |
 | `jobs.schedule` | El escaneo cada 15 minutos. |
 | `plugin.state.read`, `plugin.state.write` | Guardar la última instantánea y las horas de "visto por primera vez". Es lo único que escribe el plugin, y solo en su propio estado. |
-| `ui.page.register`, `ui.sidebar.register` | La página y su enlace del menú lateral. |
+| `ui.page.register`, `ui.sidebar.register`, `ui.action.register` | La página, su enlace del menú lateral y su botón en la barra de arriba. |
 
 Ausentes a propósito: `issues.update`, `issues.wakeup` y cualquier capacidad de comentar. La versión 1 no puede cambiar ninguna tarea. El plugin no llama a ningún servicio externo.
 
@@ -103,7 +112,7 @@ La versión 2 actuará, con límites duros:
 - Como máximo una acción por tarea cada 24 horas.
 - Como máximo 3 intentos por tarea que frena; después solo informa.
 - Un comentario en la tarea cada vez que actúa, para que quede el rastro.
-- Un interruptor por empresa, apagado por defecto.
+- Se mantiene el interruptor por empresa, apagado por defecto.
 
 ## Desarrollo
 

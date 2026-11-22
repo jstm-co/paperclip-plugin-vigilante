@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Stopper } from "../src/classify.js";
-import { buildSnapshot, mergeFirstSeen, parseStored, toStopperView, type FirstSeen } from "../src/snapshot.js";
+import { buildState, failedState, mergeFirstSeen, parseState, toStopperView } from "../src/snapshot.js";
 
 const T1 = "2026-03-10T10:00:00.000Z";
 const T2 = "2026-03-10T10:15:00.000Z";
-const NONE = new Set<string>();
+const META = { id: "c1", name: "Acme", issuePrefix: "ACM" };
 
 function stopper(issueId: string, over: Partial<Stopper> = {}): Stopper {
   return {
@@ -21,29 +21,21 @@ function stopper(issueId: string, over: Partial<Stopper> = {}): Stopper {
 
 describe("mergeFirstSeen", () => {
   it("adds new stoppers with the scan time", () => {
-    expect(mergeFirstSeen({}, [{ issueId: "a", companyId: "c1" }], NONE, T1)).toEqual({ a: { at: T1, companyId: "c1" } });
+    expect(mergeFirstSeen({}, ["a"], T1)).toEqual({ a: T1 });
   });
 
   it("keeps the original time of one that is still stuck", () => {
-    const prev: FirstSeen = { a: { at: T1, companyId: "c1" } };
-    expect(mergeFirstSeen(prev, [{ issueId: "a", companyId: "c1" }], NONE, T2).a!.at).toBe(T1);
+    expect(mergeFirstSeen({ a: T1 }, ["a"], T2).a).toBe(T1);
   });
 
   it("drops entries that disappeared", () => {
-    const prev: FirstSeen = { a: { at: T1, companyId: "c1" }, b: { at: T1, companyId: "c1" } };
-    expect(Object.keys(mergeFirstSeen(prev, [{ issueId: "b", companyId: "c1" }], NONE, T2))).toEqual(["b"]);
-  });
-
-  it("keeps entries of a company that failed to scan", () => {
-    const prev: FirstSeen = { a: { at: T1, companyId: "c1" }, b: { at: T1, companyId: "c2" } };
-    const next = mergeFirstSeen(prev, [], new Set(["c1"]), T2);
-    expect(next).toEqual({ a: { at: T1, companyId: "c1" } });
+    expect(Object.keys(mergeFirstSeen({ a: T1, b: T1 }, ["b"], T2))).toEqual(["b"]);
   });
 
   it("does not mutate the previous map", () => {
-    const prev: FirstSeen = { a: { at: T1, companyId: "c1" } };
-    mergeFirstSeen(prev, [], NONE, T2);
-    expect(prev).toEqual({ a: { at: T1, companyId: "c1" } });
+    const prev = { a: T1 };
+    mergeFirstSeen(prev, [], T2);
+    expect(prev).toEqual({ a: T1 });
   });
 });
 
@@ -59,37 +51,36 @@ describe("toStopperView", () => {
   });
 });
 
-describe("buildSnapshot", () => {
-  const scans = [
-    { id: "c1", name: "Acme", issuePrefix: "ACM", stoppers: [stopper("a")] },
-    { id: "c2", name: "Globex", issuePrefix: "GLX", stoppers: null },
-  ];
+describe("buildState / failedState", () => {
+  it("stamps firstSeenAt from the previous record and clears errors", () => {
+    const prev = { company: null, firstSeen: { a: T1, z: T1 }, errors: [{ companyId: "c1", message: "old" }] };
+    const state = buildState(META, [stopper("a")], prev, new Date(T2), 42);
+    expect(state.company).toMatchObject({ id: "c1", name: "Acme", scannedAt: T2, durationMs: 42 });
+    expect(state.company!.stoppers[0]!.firstSeenAt).toBe(T1);
+    expect(state.firstSeen).toEqual({ a: T1 });
+    expect(state.errors).toEqual([]);
+  });
 
-  it("builds companies, stamps firstSeenAt and records errors", () => {
-    const prev: FirstSeen = { a: { at: T1, companyId: "c1" }, z: { at: T1, companyId: "c2" } };
-    const errors = [{ companyId: "c2", message: "boom" }];
-    const { snapshot, firstSeen } = buildSnapshot(scans, errors, prev, new Date(T2), 42);
-    expect(snapshot.scannedAt).toBe(T2);
-    expect(snapshot.durationMs).toBe(42);
-    expect(snapshot.errors).toEqual(errors);
-    expect(snapshot.companies[0]!.stoppers[0]!.firstSeenAt).toBe(T1);
-    expect(snapshot.companies[1]!.stoppers).toEqual([]);
-    expect(Object.keys(firstSeen).sort()).toEqual(["a", "z"]);
+  it("a failed scan keeps the company part and first-seen history", () => {
+    const good = buildState(META, [stopper("a")], { company: null, firstSeen: {}, errors: [] }, new Date(T1), 1);
+    const failed = failedState(good, { companyId: "c1", companyName: "Acme", message: "boom" });
+    expect(failed.company).toEqual(good.company);
+    expect(failed.firstSeen).toEqual(good.firstSeen);
+    expect(failed.errors).toEqual([{ companyId: "c1", companyName: "Acme", message: "boom" }]);
   });
 });
 
-describe("parseStored", () => {
-  it("returns empty values for garbage", () => {
-    expect(parseStored(null)).toEqual({ snapshot: null, firstSeen: {} });
-    expect(parseStored("x")).toEqual({ snapshot: null, firstSeen: {} });
-    expect(parseStored({ snapshot: 3, firstSeen: { a: 1, b: { at: T1, companyId: "c" } } })).toEqual({
-      snapshot: null,
-      firstSeen: { b: { at: T1, companyId: "c" } },
-    });
+describe("parseState", () => {
+  it("returns an empty record for garbage, with arrays always present", () => {
+    for (const bad of [null, undefined, "x", 3]) expect(parseState(bad)).toEqual({ company: null, firstSeen: {}, errors: [] });
+    const odd = parseState({ company: { id: "c" }, firstSeen: { a: 1, b: T1 }, errors: "nope" });
+    expect(odd.errors).toEqual([]);
+    expect(odd.company!.stoppers).toEqual([]);
+    expect(odd.firstSeen).toEqual({ b: T1 });
   });
 
-  it("round-trips a built snapshot", () => {
-    const built = buildSnapshot([{ id: "c1", name: "Acme", issuePrefix: "ACM", stoppers: [stopper("a")] }], [], {}, new Date(T1), 1);
-    expect(parseStored(JSON.parse(JSON.stringify(built)))).toEqual(built);
+  it("round-trips a built record", () => {
+    const state = buildState(META, [stopper("a")], { company: null, firstSeen: {}, errors: [] }, new Date(T1), 1);
+    expect(parseState(JSON.parse(JSON.stringify(state)))).toEqual({ ...state, errors: [] });
   });
 });

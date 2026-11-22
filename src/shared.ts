@@ -6,6 +6,8 @@ export const JOB_SCAN = "scan";
 export const ACTION_SCAN_NOW = "scan-now";
 export const DATA_REPORT = "report";
 export const STATE_KEY = "scan";
+/** The per-company switch declared in `instanceConfigSchema`. */
+export const CONFIG_ENABLED = "enabled";
 
 /** A stopper as stored in the snapshot and shown by the UI. */
 export interface StopperView {
@@ -26,20 +28,36 @@ export interface CompanySnapshot {
   id: string;
   name: string;
   issuePrefix: string | null;
+  /** ISO time of the last scan of this company that finished. */
+  scannedAt: string;
+  durationMs: number;
   stoppers: StopperView[];
 }
 
 export interface ScanError {
   companyId: string | null;
+  /** Shown in the UI so the message says which company failed. */
+  companyName?: string | null;
   message: string;
 }
 
-export interface Snapshot {
-  scannedAt: string;
-  durationMs: number;
-  companies: CompanySnapshot[];
+/**
+ * What is stored for ONE company (plugin state, company scope). Each company has
+ * its own record, so a scan of one company can never touch another one's data.
+ */
+export interface CompanyState {
+  /** `null` until the first scan of the company finishes. */
+  company: CompanySnapshot | null;
+  /** `firstSeen[issueId]`: ISO time of the first scan that saw the issue stuck. */
+  firstSeen: Record<string, string>;
+  /** Errors of the last scan attempt; empty after a good one. */
   errors: ScanError[];
 }
 
-/** Report returned by the `report` data endpoint: `null` until the first scan. */
-export type Report = Snapshot | null;
+/** What the `report` data endpoint returns: the part of the asked company only. */
+export interface Report {
+  /** Whether the periodic scan covers this company (per-company switch). */
+  enabled: boolean;
+  company: CompanySnapshot | null;
+  errors: ScanError[];
+}

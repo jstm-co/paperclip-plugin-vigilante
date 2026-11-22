@@ -19,7 +19,7 @@ function useTr() {
 
 function EyeIcon() {
   return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg className="h-4 w-4" width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -44,6 +44,27 @@ export function VigilanteSidebarLink(_props: PluginSidebarProps) {
         <EyeIcon />
       </span>
       <span className="flex-1 truncate">{tr("title")}</span>
+    </a>
+  );
+}
+
+/** Button in the host's top toolbar (slot `globalToolbarButton`): visible on every page, unlike sidebar slots. */
+export function VigilanteToolbarButton() {
+  const navigation = useHostNavigation();
+  const location = useHostLocation();
+  const { tr } = useTr();
+  useLayoutEffect(() => ensureStyles(), []);
+  const active = location.pathname.replace(/\/+$/, "").endsWith(`/${PAGE_ROUTE}`);
+  return (
+    <a
+      {...navigation.linkProps(`/${PAGE_ROUTE}`)}
+      aria-current={active ? "page" : undefined}
+      aria-label={tr("title")}
+      title={tr("toolbarHint")}
+      className={`vg-tb${active ? " is-on" : ""}`}
+    >
+      <EyeIcon />
+      <span className="vg-tb-lbl">{tr("title")}</span>
     </a>
   );
 }
@@ -131,16 +152,18 @@ export function VigilantePage({ context }: PluginPageProps) {
     }
   };
 
-  const snapshot = report.data;
-  const total = snapshot?.companies.reduce((sum, company) => sum + company.stoppers.length, 0) ?? 0;
+  const data = report.data;
+  const company = data?.company ?? null;
+  const errors = Array.isArray(data?.errors) ? data.errors : [];
+  const scannedAt = company?.scannedAt ? new Date(company.scannedAt) : null;
 
   return (
     <div className="vg">
       <div className="vg-head">
         <h1 className="vg-title">{tr("title")}</h1>
         <span className="vg-muted">
-          {snapshot
-            ? tr("lastScan", { when: new Date(snapshot.scannedAt).toLocaleString(locale), ms: snapshot.durationMs })
+          {company && scannedAt
+            ? tr("lastScan", { when: scannedAt.toLocaleString(locale), ms: company.durationMs })
             : report.loading
               ? tr("loading")
               : tr("neverScanned")}
@@ -154,22 +177,31 @@ export function VigilantePage({ context }: PluginPageProps) {
       <div className="vg-banner" role="note">
         {tr("banner")}
       </div>
+      {data && !data.enabled ? (
+        <div className="vg-banner" role="note">
+          {tr("disabledNote")}
+        </div>
+      ) : null}
 
       {report.error ? <div className="vg-error">{tr("loadFailed", { message: report.error.message })}</div> : null}
       {failure ? <div className="vg-error">{tr("scanFailed", { message: failure })}</div> : null}
-      {snapshot && snapshot.errors.length > 0 ? (
+      {errors.length > 0 ? (
         <div className="vg-error">
           {tr("errorsTitle")}
           <ul>
-            {snapshot.errors.map((error, i) => (
-              <li key={i}>{error.message}</li>
+            {errors.map((error, i) => (
+              <li key={i}>
+                {error.companyName || company?.name || error.companyId
+                  ? tr("errorLine", { company: error.companyName || company?.name || error.companyId || "", message: error.message })
+                  : error.message}
+              </li>
             ))}
           </ul>
         </div>
       ) : null}
 
-      {snapshot && total === 0 && snapshot.errors.length === 0 ? <div className="vg-empty">{tr("empty")}</div> : null}
-      {snapshot?.companies.map((company) => <CompanyTable key={company.id} company={company} locale={locale} tr={tr} />)}
+      {company && company.stoppers.length === 0 && errors.length === 0 ? <div className="vg-empty">{tr("empty")}</div> : null}
+      {company ? <CompanyTable company={company} locale={locale} tr={tr} /> : null}
     </div>
   );
 }

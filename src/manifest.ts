@@ -1,5 +1,5 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
-import { JOB_SCAN, PAGE_ROUTE } from "./shared.js";
+import { CONFIG_ENABLED, JOB_SCAN, PAGE_ROUTE } from "./shared.js";
 
 declare const __VIGILANTE_VERSION__: string;
 
@@ -25,10 +25,27 @@ const manifest: PaperclipPluginManifestV1 = {
     "plugin.state.write",
     "ui.page.register",
     "ui.sidebar.register",
+    // For the top toolbar button: the default "Coordinator" workspace does not draw
+    // `sidebar` slots, so without the button the page would be unreachable.
+    "ui.action.register",
   ],
   entrypoints: {
     worker: "./dist/worker.js",
     ui: "./dist/ui",
+  },
+  // Saved once per company. The 15-minute scan has no company scope, so it can only
+  // touch the companies that have a saved config; it scans those with `enabled` on.
+  instanceConfigSchema: {
+    type: "object",
+    properties: {
+      [CONFIG_ENABLED]: {
+        type: "boolean",
+        title: "Scan this company every 15 minutes",
+        description:
+          "When on, Vigilante scans this company's blocked chains every 15 minutes. When off, only the Scan now button on the Vigilante page scans it. Watch-only: nothing is changed either way.",
+        default: false,
+      },
+    },
   },
   jobs: [
     {
@@ -52,6 +69,12 @@ const manifest: PaperclipPluginManifestV1 = {
         id: "vigilante-sidebar",
         displayName: "Vigilante",
         exportName: "VigilanteSidebarLink",
+      },
+      {
+        type: "globalToolbarButton",
+        id: "vigilante-toolbar",
+        displayName: "Vigilante",
+        exportName: "VigilanteToolbarButton",
       },
     ],
   },

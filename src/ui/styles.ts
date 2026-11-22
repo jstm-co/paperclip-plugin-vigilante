@@ -1,20 +1,27 @@
 // Own stylesheet: the host only ships the Tailwind classes its core uses. Tokens
 // live in `.vg` and follow the host's `.dark` class.
 const CSS = /* css */ `
-.vg {
+.vg, .vg-tb {
   --vg-fg: #0a0a0a; --vg-muted-fg: #737373; --vg-card: #ffffff; --vg-border: #e5e5e5; --vg-head: #f5f5f5;
   --vg-primary: #171717; --vg-primary-fg: #fafafa; --vg-hover: rgba(0,0,0,.04);
   --vg-warn-bg: #fff6db; --vg-warn-border: #ecd9a0; --vg-warn-fg: #7a5000;
   --vg-danger-bg: rgba(220,38,38,.07); --vg-danger-border: rgba(220,38,38,.35); --vg-danger-fg: #b91c1c;
-  color: var(--vg-fg); font-size: 14px; line-height: 20px; padding: 16px 0;
+  color: var(--vg-fg);
 }
-.dark .vg {
+.vg { font-size: 14px; line-height: 20px; padding: 16px 0; }
+.dark .vg, .dark .vg-tb {
   --vg-fg: #fafafa; --vg-muted-fg: #a1a1a1; --vg-card: #171717; --vg-border: rgba(255,255,255,.10); --vg-head: #262626;
   --vg-primary: #e5e5e5; --vg-primary-fg: #171717; --vg-hover: rgba(255,255,255,.04);
   --vg-warn-bg: #2f2812; --vg-warn-border: #5c4c1d; --vg-warn-fg: #f2b544;
   --vg-danger-bg: rgba(239,68,68,.08); --vg-danger-border: rgba(239,68,68,.45); --vg-danger-fg: #fca5a5;
 }
 .vg * { box-sizing: border-box; }
+/* Button in the host's top toolbar: same height as its neighbours. */
+.vg-tb { box-sizing: border-box; height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px 0 8px; border-radius: 8px; border: 1px solid var(--vg-border); background: transparent; font-size: 13px; line-height: 20px; font-weight: 500; white-space: nowrap; text-decoration: none; cursor: pointer; }
+.vg-tb:hover { background: var(--vg-hover); }
+.vg-tb.is-on { background: var(--vg-head); }
+.vg-tb svg { width: 16px; height: 16px; flex: none; }
+@media (max-width: 640px) { .vg-tb { border: 0; padding: 0 6px; } .vg-tb .vg-tb-lbl { display: none; } }
 .vg-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .vg-title { font-size: 20px; line-height: 28px; font-weight: 600; margin: 0; }
 .vg-grow { flex: 1; }
