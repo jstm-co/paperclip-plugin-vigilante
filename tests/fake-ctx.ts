@@ -44,6 +44,19 @@ export function fakeCtx(companies: FakeCompany[]) {
         calls.push(`issues.get:${id}`);
         throw new Error("issues.get must not be called");
       },
+      relations: {
+        async get(id: string, companyId: string) {
+          calls.push(`issues.relations.get:${id}`);
+          const row = find(companyId)?.issues.find((i) => i.id === id);
+          const ids = (row?.blockedByIds as string[] | undefined) ?? [];
+          const all = companies.flatMap((c) => c.issues);
+          const blockedBy = ids.map((bid) => {
+            const b = all.find((i) => i.id === bid);
+            return { id: bid, identifier: null, title: String(b?.title ?? bid), status: String(b?.status ?? "done"), priority: "medium", assigneeAgentId: null, assigneeUserId: null };
+          });
+          return { blockedBy, blocks: [] };
+        },
+      },
     },
     state: {
       async get(scope: { scopeKind: string; scopeId?: string; stateKey: string }) {

@@ -20,6 +20,8 @@ const manifest: PaperclipPluginManifestV1 = {
   capabilities: [
     "companies.read",
     "issues.read",
+    // Read-only: which issues block an open one that is not `blocked` itself.
+    "issue.relations.read",
     "jobs.schedule",
     "plugin.state.read",
     "plugin.state.write",

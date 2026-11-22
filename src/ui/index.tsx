@@ -99,14 +99,29 @@ function StopperRow({ company, stopper, locale, tr }: { company: CompanySnapshot
   );
 }
 
-function CompanyTable({ company, locale, tr }: { company: CompanySnapshot; locale: Locale; tr: ReturnType<typeof useTr>["tr"] }) {
-  if (company.stoppers.length === 0) return null;
+type TableProps = { company: CompanySnapshot; locale: Locale; tr: ReturnType<typeof useTr>["tr"] };
+
+/** Long-quiet stoppers first; the ones that moved recently go in their own table below. */
+function CompanyTable({ company, locale, tr }: TableProps) {
+  const quiet = company.stoppers.filter((stopper) => !stopper.recent);
+  const recent = company.stoppers.filter((stopper) => stopper.recent);
+  return (
+    <>
+      <StopperTable company={company} locale={locale} tr={tr} stoppers={quiet} title={tr("sectionQuiet")} />
+      <StopperTable company={company} locale={locale} tr={tr} stoppers={recent} title={tr("sectionRecent")} note={tr("recentNote")} />
+    </>
+  );
+}
+
+function StopperTable({ company, locale, tr, stoppers, title, note }: TableProps & { stoppers: StopperView[]; title: string; note?: string }) {
+  if (stoppers.length === 0) return null;
   return (
     <section>
       <h2 className="vg-company">
-        {company.name}
-        <span className="vg-count vg-muted">{tr(company.stoppers.length === 1 ? "issues.one" : "issues.many", { n: company.stoppers.length })}</span>
+        {title}
+        <span className="vg-count vg-muted">{tr(stoppers.length === 1 ? "issues.one" : "issues.many", { n: stoppers.length })}</span>
       </h2>
+      {note ? <p className="vg-muted vg-note">{note}</p> : null}
       <div className="vg-wrap">
         <table>
           <thead>
@@ -120,7 +135,7 @@ function CompanyTable({ company, locale, tr }: { company: CompanySnapshot; local
             </tr>
           </thead>
           <tbody>
-            {company.stoppers.map((stopper) => (
+            {stoppers.map((stopper) => (
               <StopperRow key={stopper.issueId} company={company} stopper={stopper} locale={locale} tr={tr} />
             ))}
           </tbody>

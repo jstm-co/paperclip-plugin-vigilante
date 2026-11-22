@@ -20,6 +20,8 @@ export interface StopperView {
   stops: number;
   quietMs: number | null;
   reason: string | null;
+  /** Moved less than the quiet threshold ago: shown apart, nothing would be done yet. */
+  recent: boolean;
   /** ISO time of the first scan that saw this issue stuck. */
   firstSeenAt: string;
 }

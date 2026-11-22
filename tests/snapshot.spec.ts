@@ -15,6 +15,7 @@ function stopper(issueId: string, over: Partial<Stopper> = {}): Stopper {
     kind: "backlog_unowned",
     wouldDo: "report",
     reason: null,
+    recent: false,
     ...over,
   };
 }

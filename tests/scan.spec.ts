@@ -44,11 +44,15 @@ describe("scanCompany", () => {
     expect(read(store, "c-acme")!.company!.stoppers).toMatchObject([{ issueId: "x", kind: "blocked_unexplained", wouldDo: "wake_assignee" }]);
   });
 
-  it("skips the other statuses when no blocked row needs attention", async () => {
-    const covered = row("c", { status: "blocked", blockerAttention: { state: "covered", unresolvedBlockerCount: 1, terminalBlockerIssueId: "z" } });
-    const { ctx, calls } = fakeCtx([acme({ issues: [covered, row("s1", { status: "backlog" })] })]);
+  it("finds what holds a todo issue that is not blocked, reading relations only for open issues with an agent", async () => {
+    const held = row("t", { status: "todo", assigneeAgentId: "a1", blockedByIds: ["b", "closed"] });
+    const free = row("f", { status: "in_progress", assigneeAgentId: "a1" });
+    const noAgent = row("n", { status: "todo", assigneeAgentId: null, blockedByIds: ["b"] });
+    const issues = [held, free, noAgent, row("b", { status: "backlog", assigneeAgentId: "a1" }), row("closed", { status: "done" })];
+    const { ctx, calls, store } = fakeCtx([acme({ issues })]);
     await scanCompany(ctx, "c-acme", { now: NOW_DATE });
-    expect(calls.filter((c) => c.startsWith("issues.list"))).toEqual(["issues.list:c-acme:blocked"]);
+    expect(calls.filter((c) => c.startsWith("issues.relations.get")).sort()).toEqual(["issues.relations.get:f", "issues.relations.get:t"]);
+    expect(read(store, "c-acme")!.company!.stoppers).toMatchObject([{ issueId: "b", stops: 1, kind: "backlog_assigned" }]);
   });
 
   it("keeps the first-seen time across scans", async () => {

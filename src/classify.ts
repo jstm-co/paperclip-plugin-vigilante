@@ -8,10 +8,11 @@ export type StopperKind =
   | "waiting_third_party"
   | "gave_up"
   | "blocked_unexplained"
+  | "open_no_run"
   | "other"
   | "unknown";
 
-export type WouldDo = "none" | "report" | "promote_to_todo" | "wake_assignee";
+export type WouldDo = "none" | "wait" | "report" | "promote_to_todo" | "wake_assignee";
 
 /** Minimal shape of an issue the classifier needs. Timestamps are ISO strings. */
 export interface ScanIssue {
@@ -39,6 +40,13 @@ export interface ScanIssue {
 export interface ClassifyOptions {
   /** A stopper updated more recently than this is considered to be moving. Default 24. */
   quietHours?: number;
+  /**
+   * Open issues that are NOT `blocked` but still have unresolved blockers, as
+   * `issueId -> blocker ids`. The host cancels every wake of such an issue
+   * ("dependencies blocked") and reports no blocker attention for it, so the
+   * scan reads its relations and passes them here.
+   */
+  heldBy?: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface Stopper {
@@ -53,11 +61,18 @@ export interface Stopper {
   wouldDo: WouldDo;
   /** Explanation text when there is one (waiting_third_party). */
   reason: string | null;
+  /**
+   * The stopper moved less than `quietHours` ago. It is listed so a fresh jam is
+   * visible, but it is too soon to act: `wouldDo` is `wait`.
+   */
+  recent: boolean;
 }
 
 export const DEFAULT_QUIET_HOURS = 24;
 const HOUR_MS = 3_600_000;
 const CLOSED = new Set(["done", "cancelled"]);
+/** Open work that Paperclip's own sweep is expected to move. */
+const OPEN_WORK = new Set(["todo", "in_progress", "in_review"]);
 const INACTIVE_ACTION = new Set(["resolved", "completed", "cancelled", "canceled", "closed", "done", "dismissed", "expired"]);
 
 function text(value: string | null | undefined): string | null {
@@ -124,6 +139,7 @@ export function classifyIssue(issue: ScanIssue): { kind: StopperKind; wouldDo: W
       return { kind: "blocked_unexplained", wouldDo: "wake_assignee", reason: null };
     }
   }
+  if (OPEN_WORK.has(issue.status)) return { kind: "open_no_run", wouldDo: "report", reason: null };
   return { kind: "other", wouldDo: "report", reason: null };
 }
 
@@ -139,22 +155,36 @@ export function classify(issues: ScanIssue[], now: number, options: ClassifyOpti
     stops.set(target, (stops.get(target) ?? 0) + (target === issue.id ? 0 : 1));
   }
 
+  // Open issues held by their blockers: each blocker (or the end of its own chain) stops them.
+  for (const [issueId, blockers] of options.heldBy ?? []) {
+    const roots = new Set<string>();
+    for (const blockerId of blockers) {
+      const blocker = byId.get(blockerId);
+      const root = (blocker && rootStopperId(blocker, byId)) ?? blockerId;
+      if (root !== issueId) roots.add(root);
+    }
+    for (const root of roots) stops.set(root, (stops.get(root) ?? 0) + 1);
+  }
+
   const result: Stopper[] = [];
   for (const [issueId, count] of stops) {
     const issue = byId.get(issueId) ?? null;
     if (!issue) {
-      result.push({ issueId, issue: null, stops: count, quietMs: null, kind: "unknown", wouldDo: "report", reason: null });
+      result.push({ issueId, issue: null, stops: count, quietMs: null, kind: "unknown", wouldDo: "report", reason: null, recent: false });
       continue;
     }
     if (CLOSED.has(issue.status) || issue.activeRun) continue;
     const updated = Date.parse(issue.lastActivityAt || issue.updatedAt);
     const quiet = Number.isNaN(updated) ? null : Math.max(0, now - updated);
-    if (quiet !== null && quiet < quietMs) continue;
-    result.push({ issueId, issue, stops: count, quietMs: quiet, ...classifyIssue(issue) });
+    const verdict = classifyIssue(issue);
+    const recent = quiet !== null && quiet < quietMs;
+    // A person is already asked by Paperclip: that stays `none`, recent or not.
+    const wouldDo = recent && verdict.wouldDo !== "none" ? "wait" : verdict.wouldDo;
+    result.push({ issueId, issue, stops: count, quietMs: quiet, ...verdict, wouldDo, recent });
   }
 
-  // Most stops first, then the longest quiet (unknown age sorts last), then id for stability.
+  // Long-quiet ones first; then most stops, the longest quiet (unknown age sorts last), and id for stability.
   return result.sort(
-    (a, b) => b.stops - a.stops || (b.quietMs ?? -1) - (a.quietMs ?? -1) || a.issueId.localeCompare(b.issueId),
+    (a, b) => Number(a.recent) - Number(b.recent) || b.stops - a.stops || (b.quietMs ?? -1) - (a.quietMs ?? -1) || a.issueId.localeCompare(b.issueId),
   );
 }
