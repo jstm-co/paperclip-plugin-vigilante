@@ -107,9 +107,9 @@ describe("classifyIssue kinds", () => {
     expect(classifyIssue(blockedOn("1", null, { assigneeAgentId: null }))).toMatchObject({ kind: "other", wouldDo: "report" });
   });
 
-  it("g: quiet todo / in_progress / in_review -> other / report", () => {
+  it("g: todo / in_progress / in_review -> open_no_run / report", () => {
     for (const status of ["todo", "in_progress", "in_review"]) {
-      expect(classifyIssue(issue("1", { status, assigneeAgentId: "a1" }))).toMatchObject({ kind: "other", wouldDo: "report" });
+      expect(classifyIssue(issue("1", { status, assigneeAgentId: "a1" }))).toMatchObject({ kind: "open_no_run", wouldDo: "report" });
     }
   });
 });
@@ -124,7 +124,7 @@ describe("classify", () => {
     const issues = [blockedOn("A", "C"), blockedOn("B", "C"), c];
     const result = classify(issues, NOW);
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ issueId: "C", stops: 2, kind: "other" });
+    expect(result[0]).toMatchObject({ issueId: "C", stops: 2, kind: "open_no_run", recent: false });
     expect(result[0]!.quietMs).toBe(48 * HOUR);
   });
 
@@ -151,7 +151,7 @@ describe("classify", () => {
 
   it("reports a missing stopper as unknown with just the id", () => {
     const result = classify([blockedOn("A", "gone"), blockedOn("B", "gone")], NOW);
-    expect(result).toEqual([{ issueId: "gone", issue: null, stops: 2, quietMs: null, kind: "unknown", wouldDo: "report", reason: null }]);
+    expect(result).toEqual([{ issueId: "gone", issue: null, stops: 2, quietMs: null, kind: "unknown", wouldDo: "report", reason: null, recent: false }]);
   });
 
   it("ignores a stopper with an active run", () => {
@@ -164,15 +164,30 @@ describe("classify", () => {
     expect(classify([blockedOn("A", "C"), issue("C", { status: "cancelled" })], NOW)).toEqual([]);
   });
 
-  it("ignores a stopper updated less than quietHours ago (default 24)", () => {
-    expect(classify([blockedOn("A", "C"), issue("C", { updatedAt: ago(23) })], NOW)).toEqual([]);
-    expect(classify([blockedOn("A", "C"), issue("C", { updatedAt: ago(24) })], NOW)).toHaveLength(1);
+  it("marks a stopper updated less than quietHours ago (default 24) as recent: listed, nothing to do yet", () => {
+    const backlog = (hours: number) => issue("C", { status: "backlog", assigneeAgentId: "a1", updatedAt: ago(hours) });
+    expect(classify([blockedOn("A", "C"), backlog(23)], NOW)).toMatchObject([{ issueId: "C", recent: true, kind: "backlog_assigned", wouldDo: "wait" }]);
+    expect(classify([blockedOn("A", "C"), backlog(24)], NOW)).toMatchObject([{ issueId: "C", recent: false, wouldDo: "promote_to_todo" }]);
   });
 
   it("honors a custom quietHours", () => {
     const issues = [blockedOn("A", "C"), issue("C", { updatedAt: ago(5) })];
-    expect(classify(issues, NOW, { quietHours: 6 })).toEqual([]);
-    expect(classify(issues, NOW, { quietHours: 4 })).toHaveLength(1);
+    expect(classify(issues, NOW, { quietHours: 6 })).toMatchObject([{ recent: true }]);
+    expect(classify(issues, NOW, { quietHours: 4 })).toMatchObject([{ recent: false }]);
+  });
+
+  it("a recent stopper that waits for a person stays `none`", () => {
+    const person = issue("C", { status: "todo", assigneeUserId: "u1", updatedAt: ago(1) });
+    expect(classify([blockedOn("A", "C"), person], NOW)).toMatchObject([{ kind: "waiting_person", wouldDo: "none", recent: true }]);
+  });
+
+  it("sorts long-quiet stoppers before recent ones, whatever they stop", () => {
+    const issues = [
+      blockedOn("A", "R"), blockedOn("B", "R"), blockedOn("D", "Q"),
+      issue("R", { status: "backlog", updatedAt: ago(1) }),
+      issue("Q", { status: "backlog", updatedAt: ago(72) }),
+    ];
+    expect(classify(issues, NOW).map((s) => s.issueId)).toEqual(["Q", "R"]);
   });
 
   it("an unparsable updatedAt does not hide the stopper", () => {
@@ -232,14 +247,40 @@ describe("chains whose host terminal is itself blocked", () => {
 
 describe("quiet threshold", () => {
   const stopperRow = (over: Partial<ScanIssue>) => issue("9", { status: "backlog", ...over });
-  const run = (stopper: ScanIssue) => classify([blockedOn("1", "9"), stopper], NOW).map((s) => s.issueId);
+  const run = (stopper: ScanIssue) => classify([blockedOn("1", "9"), stopper], NOW).map((s) => s.recent);
 
-  it("uses lastActivityAt when present: a recent comment keeps the stopper out", () => {
-    expect(run(stopperRow({ updatedAt: ago(48), lastActivityAt: ago(1) }))).toEqual([]);
+  it("uses lastActivityAt when present: a recent comment makes the stopper recent", () => {
+    expect(run(stopperRow({ updatedAt: ago(48), lastActivityAt: ago(1) }))).toEqual([true]);
   });
 
   it("falls back to updatedAt without lastActivityAt", () => {
-    expect(run(stopperRow({ updatedAt: ago(48) }))).toEqual(["9"]);
-    expect(run(stopperRow({ updatedAt: ago(48), lastActivityAt: null }))).toEqual(["9"]);
+    expect(run(stopperRow({ updatedAt: ago(48) }))).toEqual([false]);
+    expect(run(stopperRow({ updatedAt: ago(48), lastActivityAt: null }))).toEqual([false]);
+  });
+});
+
+describe("open issues held by their blockers", () => {
+  it("counts an open issue against each unresolved blocker", () => {
+    const issues = [
+      issue("T", { status: "todo", assigneeAgentId: "a1" }),
+      issue("B1", { status: "backlog", assigneeAgentId: "a1" }),
+      issue("B2", { status: "backlog" }),
+    ];
+    const result = classify(issues, NOW, { heldBy: new Map([["T", ["B1", "B2"]]]) });
+    expect(result.map((s) => [s.issueId, s.stops, s.kind])).toEqual([
+      ["B1", 1, "backlog_assigned"],
+      ["B2", 1, "backlog_unowned"],
+    ]);
+  });
+
+  it("follows a blocked blocker to the end of its chain and counts the holder once", () => {
+    const issues = [issue("T", { status: "todo", assigneeAgentId: "a1" }), blockedOn("M1", "END"), blockedOn("M2", "END"), issue("END", { status: "backlog" })];
+    const result = classify(issues, NOW, { heldBy: new Map([["T", ["M1", "M2"]]]) });
+    expect(result).toMatchObject([{ issueId: "END", stops: 3 }]);
+  });
+
+  it("reports a blocker that is not in the list as unknown", () => {
+    const result = classify([issue("T", { status: "todo" })], NOW, { heldBy: new Map([["T", ["gone"]]]) });
+    expect(result).toMatchObject([{ issueId: "gone", kind: "unknown", stops: 1 }]);
   });
 });

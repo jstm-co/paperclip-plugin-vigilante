@@ -25,6 +25,7 @@ export function toStopperView(stopper: Stopper, firstSeenAt: string): StopperVie
     stops: stopper.stops,
     quietMs: stopper.quietMs,
     reason: stopper.reason,
+    recent: stopper.recent,
     firstSeenAt,
   };
 }
@@ -61,7 +62,8 @@ function parseStopper(value: unknown): StopperView | null {
   if (!value || typeof value !== "object") return null;
   const s = value as Partial<StopperView>;
   if (typeof s.issueId !== "string" || typeof s.kind !== "string" || typeof s.firstSeenAt !== "string") return null;
-  return s as StopperView;
+  // Records written before `recent` existed only held long-quiet stoppers.
+  return { ...(s as StopperView), recent: s.recent === true };
 }
 
 function parseError(value: unknown): ScanError | null {

@@ -44,17 +44,12 @@ export function toScanIssue(issue: Issue): ScanIssue {
   };
 }
 
-/**
- * Lists the open issues of a company, one call per status, deduplicated by id.
- * `blocked` goes first: when none of its rows needs attention nothing can be a
- * stopper, so the other four calls are skipped.
- */
+/** Lists the open issues of a company, one call per status, deduplicated by id. */
 async function listOpenIssues(ctx: PluginContext, companyId: string): Promise<Issue[]> {
   const byId = new Map<string, Issue>();
   for (const status of OPEN_STATUSES) {
     // No limit/offset: the host applies the window twice and offset > 0 returns wrong rows.
     for (const issue of await ctx.issues.list({ companyId, status })) byId.set(issue.id, issue);
-    if (status === "blocked" && ![...byId.values()].some((row) => row.blockerAttention?.state === "needs_attention")) break;
   }
   return [...byId.values()];
 }
@@ -69,6 +64,28 @@ export interface CompanyOutcome {
   ok: boolean;
   skipped?: boolean;
   error?: string;
+}
+
+/** Upper bound of relation reads per company and scan, to keep a scan cheap. */
+export const MAX_RELATION_READS = 50;
+const HELD_STATUSES = new Set(["todo", "in_progress"]);
+const RESOLVED = new Set(["done", "cancelled"]);
+
+/**
+ * Open issues with an agent and no run may be held by unresolved blockers: the
+ * host cancels their wakes ("dependencies blocked") but, as they are not
+ * `blocked`, their list row reports no blocker attention. Their relations say
+ * what holds them. One read per candidate, capped.
+ */
+async function readHeldBy(ctx: PluginContext, companyId: string, issues: ScanIssue[]): Promise<Map<string, string[]>> {
+  const heldBy = new Map<string, string[]>();
+  const candidates = issues.filter((issue) => HELD_STATUSES.has(issue.status) && issue.assigneeAgentId && !issue.activeRun);
+  for (const issue of candidates.slice(0, MAX_RELATION_READS)) {
+    const relations = await ctx.issues.relations.get(issue.id, companyId);
+    const open = (relations?.blockedBy ?? []).filter((blocker) => !RESOLVED.has(blocker.status)).map((blocker) => blocker.id);
+    if (open.length > 0) heldBy.set(issue.id, open);
+  }
+  return heldBy;
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -110,7 +127,8 @@ export async function scanCompany(ctx: PluginContext, companyId: string, options
 
   try {
     const issues = (await listOpenIssues(ctx, companyId)).map(toScanIssue);
-    const stoppers = classify(issues, scannedAt.getTime(), { quietHours: options.quietHours });
+    const heldBy = await readHeldBy(ctx, companyId, issues);
+    const stoppers = classify(issues, scannedAt.getTime(), { quietHours: options.quietHours, heldBy });
     const next = buildState({ id: meta.id, name: meta.name, issuePrefix: meta.issuePrefix }, stoppers, previous, scannedAt, Date.now() - started);
     await ctx.state.set(stateScope(companyId), next);
     return { companyId, ok: true };

@@ -26,6 +26,7 @@ const CSS = /* css */ `
 .vg-title { font-size: 20px; line-height: 28px; font-weight: 600; margin: 0; }
 .vg-grow { flex: 1; }
 .vg-muted { color: var(--vg-muted-fg); }
+.vg-note { margin: 0 0 8px; font-size: 13px; }
 .vg-btn { border: 1px solid var(--vg-border); background: var(--vg-primary); color: var(--vg-primary-fg); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
 .vg-btn[disabled] { opacity: .6; cursor: default; }
 .vg-banner { border: 1px solid var(--vg-warn-border); background: var(--vg-warn-bg); color: var(--vg-warn-fg); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
