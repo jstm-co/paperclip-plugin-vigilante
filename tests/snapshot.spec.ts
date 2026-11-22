@@ -15,6 +15,8 @@ function stopper(issueId: string, over: Partial<Stopper> = {}): Stopper {
     kind: "backlog_unowned",
     wouldDo: "report",
     reason: null,
+    targetAgentId: null,
+    targetAgentName: null,
     recent: false,
     ...over,
   };
@@ -54,7 +56,7 @@ describe("toStopperView", () => {
 
 describe("buildState / failedState", () => {
   it("stamps firstSeenAt from the previous record and clears errors", () => {
-    const prev = { company: null, firstSeen: { a: T1, z: T1 }, errors: [{ companyId: "c1", message: "old" }] };
+    const prev = { company: null, firstSeen: { a: T1, z: T1 }, nudges: {}, errors: [{ companyId: "c1", message: "old" }] };
     const state = buildState(META, [stopper("a")], prev, new Date(T2), 42);
     expect(state.company).toMatchObject({ id: "c1", name: "Acme", scannedAt: T2, durationMs: 42 });
     expect(state.company!.stoppers[0]!.firstSeenAt).toBe(T1);
@@ -63,7 +65,7 @@ describe("buildState / failedState", () => {
   });
 
   it("a failed scan keeps the company part and first-seen history", () => {
-    const good = buildState(META, [stopper("a")], { company: null, firstSeen: {}, errors: [] }, new Date(T1), 1);
+    const good = buildState(META, [stopper("a")], { company: null, firstSeen: {}, nudges: {}, errors: [] }, new Date(T1), 1);
     const failed = failedState(good, { companyId: "c1", companyName: "Acme", message: "boom" });
     expect(failed.company).toEqual(good.company);
     expect(failed.firstSeen).toEqual(good.firstSeen);
@@ -73,7 +75,7 @@ describe("buildState / failedState", () => {
 
 describe("parseState", () => {
   it("returns an empty record for garbage, with arrays always present", () => {
-    for (const bad of [null, undefined, "x", 3]) expect(parseState(bad)).toEqual({ company: null, firstSeen: {}, errors: [] });
+    for (const bad of [null, undefined, "x", 3]) expect(parseState(bad)).toEqual({ company: null, firstSeen: {}, nudges: {}, errors: [] });
     const odd = parseState({ company: { id: "c" }, firstSeen: { a: 1, b: T1 }, errors: "nope" });
     expect(odd.errors).toEqual([]);
     expect(odd.company!.stoppers).toEqual([]);
@@ -81,7 +83,24 @@ describe("parseState", () => {
   });
 
   it("round-trips a built record", () => {
-    const state = buildState(META, [stopper("a")], { company: null, firstSeen: {}, errors: [] }, new Date(T1), 1);
+    const state = buildState(META, [stopper("a")], { company: null, firstSeen: {}, nudges: {}, errors: [] }, new Date(T1), 1);
     expect(parseState(JSON.parse(JSON.stringify(state)))).toEqual({ ...state, errors: [] });
   });
 });
+
+describe("nudges in the record", () => {
+  const nudge = { count: 2, lastAt: T1, targetAgentId: "ag", targetAgentName: "Tech Lead", lastRunId: "r1" };
+
+  it("keeps the nudge of a stopper and drops the ones of issues that are gone", () => {
+    const state = buildState(META, [stopper("a")], { company: null, firstSeen: {}, nudges: {}, errors: [] }, new Date(T2), 1, { a: nudge, gone: nudge });
+    expect(Object.keys(state.nudges)).toEqual(["a"]);
+    expect(state.company!.stoppers[0]!.nudge).toEqual(nudge);
+  });
+
+  it("round-trips and survives garbage", () => {
+    const state = buildState(META, [stopper("a")], { company: null, firstSeen: {}, nudges: {}, errors: [] }, new Date(T2), 1, { a: nudge });
+    expect(parseState(JSON.parse(JSON.stringify(state))).nudges).toEqual({ a: nudge });
+    expect(parseState({ nudges: { x: 3, y: { targetAgentId: "q" } }, firstSeen: {} }).nudges).toEqual({});
+  });
+});
+

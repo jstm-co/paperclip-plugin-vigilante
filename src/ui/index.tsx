@@ -8,7 +8,7 @@ import {
   type PluginSidebarProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { detectLocale, formatDuration, translate, type Locale, type MessageKey } from "../i18n.js";
-import { ACTION_SCAN_NOW, DATA_REPORT, PAGE_ROUTE, type CompanySnapshot, type Report, type StopperView } from "../shared.js";
+import { ACTION_SCAN_NOW, DATA_REPORT, MAX_NUDGES_PER_STOPPER, PAGE_ROUTE, type CompanySnapshot, type Report, type StopperView } from "../shared.js";
 import { ensureStyles } from "./styles.js";
 
 function useTr() {
@@ -93,9 +93,36 @@ function StopperRow({ company, stopper, locale, tr }: { company: CompanySnapshot
       <td>{tr(`kind.${stopper.kind}`)}</td>
       <td>{stopper.quietMs === null ? "–" : formatDuration(locale, stopper.quietMs)}</td>
       <td>{stopper.stops}</td>
-      <td>{tr(`do.${stopper.wouldDo}`)}</td>
+      <td>
+        {tr(`do.${stopper.wouldDo}`, { name: stopper.targetAgentName ?? "?" })}
+        <NudgeNote stopper={stopper} locale={locale} tr={tr} />
+      </td>
       <td title={stuckSince.toLocaleString(locale)}>{formatDuration(locale, Math.max(0, Date.now() - stuckSince.getTime()))}</td>
     </tr>
+  );
+}
+
+/** What was done about a `waiting_agent` stopper: the last wake, a skip or a failure. */
+function NudgeNote({ stopper, locale, tr }: { stopper: StopperView; locale: Locale; tr: ReturnType<typeof useTr>["tr"] }) {
+  const nudge = stopper.nudge;
+  if (stopper.kind !== "waiting_agent" || !nudge) return null;
+  const lines: string[] = [];
+  if (nudge.count > 0) {
+    const at = Date.parse(nudge.lastAt);
+    lines.push(tr("nudge.woke", { name: nudge.targetAgentName, ago: Number.isNaN(at) ? "?" : formatDuration(locale, Math.max(0, Date.now() - at)), k: nudge.count, max: MAX_NUDGES_PER_STOPPER }));
+    if (nudge.count >= MAX_NUDGES_PER_STOPPER) lines.push(tr("nudge.limit", { max: MAX_NUDGES_PER_STOPPER }));
+  }
+  if (nudge.lastError) lines.push(tr("nudge.failed", { message: nudge.lastError }));
+  else if (nudge.lastSkip === "scan_cap") lines.push(tr("nudge.scanCap"));
+  else if (nudge.lastSkip?.startsWith("not_idle:")) lines.push(tr("nudge.notIdle", { name: nudge.targetAgentName, status: nudge.lastSkip.slice("not_idle:".length) }));
+  return (
+    <>
+      {lines.map((line) => (
+        <span key={line} className="vg-reason">
+          {line}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -190,7 +217,7 @@ export function VigilantePage({ context }: PluginPageProps) {
       </div>
 
       <div className="vg-banner" role="note">
-        {tr("banner")}
+        {tr(data?.act ? "bannerAct" : "banner")}
       </div>
       {data && !data.enabled ? (
         <div className="vg-banner" role="note">

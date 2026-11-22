@@ -22,13 +22,25 @@ describe("manifest", () => {
   });
 });
 
-describe("watch-only guard", () => {
-  it("has no write capability besides plugin.state.write", () => {
+const ALLOWED_WRITES = ["plugin.state.write", "agents.invoke", "activity.log.write"];
+
+describe("capability guard", () => {
+  it("has no write capability besides state, agents.invoke and activity.log.write", () => {
     const writes = manifest.capabilities.filter(
-      (c) => c !== "plugin.state.write" && (/\.write$/.test(c) || /\.(update|create|delete|wakeup|set|add|remove|send)\b/.test(c) || c.startsWith("agent.") || c === "issues.update" || c === "issues.wakeup" || c === "issue.comments.create"),
+      (c) => !ALLOWED_WRITES.includes(c) && (/\.write$/.test(c) || /\.(update|create|delete|wakeup|set|add|remove|send|invoke|pause|resume)\b/.test(c) || c.startsWith("agent.") || c.startsWith("agents.") && c !== "agents.read"),
     );
     expect(writes).toEqual([]);
-    for (const banned of ["issues.update", "issues.wakeup", "issue.comments.create"]) expect(manifest.capabilities).not.toContain(banned);
+    for (const wanted of ALLOWED_WRITES) expect(manifest.capabilities).toContain(wanted);
+    expect(manifest.capabilities).toContain("agents.read");
+    for (const banned of ["issues.update", "issues.wakeup", "issue.comments.create", "issue.relations.write"]) expect(manifest.capabilities).not.toContain(banned);
+  });
+
+  it("declares act (off), actAfterMinutes and language", () => {
+    const props = (manifest.instanceConfigSchema as { properties: Record<string, Record<string, unknown>> }).properties;
+    expect(props.act).toMatchObject({ type: "boolean", default: false });
+    expect(props.actAfterMinutes).toMatchObject({ type: "integer", default: 30, minimum: 10 });
+    expect(props.language).toMatchObject({ type: "string", enum: ["en", "es"], default: "en" });
+    for (const key of ["act", "actAfterMinutes", "language"]) expect(String(props[key]!.title).length).toBeGreaterThan(5);
   });
 
   it("no UI file calls fetch(", () => {
