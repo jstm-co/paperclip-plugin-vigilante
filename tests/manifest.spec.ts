@@ -22,13 +22,32 @@ describe("manifest", () => {
   });
 });
 
-describe("watch-only guard", () => {
-  it("has no write capability besides plugin.state.write", () => {
-    const writes = manifest.capabilities.filter(
-      (c) => c !== "plugin.state.write" && (/\.write$/.test(c) || /\.(update|create|delete|wakeup|set|add|remove|send)\b/.test(c) || c.startsWith("agent.") || c === "issues.update" || c === "issues.wakeup" || c === "issue.comments.create"),
-    );
-    expect(writes).toEqual([]);
-    for (const banned of ["issues.update", "issues.wakeup", "issue.comments.create"]) expect(manifest.capabilities).not.toContain(banned);
+// The exact list: any addition (or removal) must be a deliberate edit of this test.
+const CAPABILITIES = [
+  "companies.read",
+  "issues.read",
+  "issue.relations.read",
+  "jobs.schedule",
+  "plugin.state.read",
+  "plugin.state.write",
+  "agents.read",
+  "agents.invoke",
+  "ui.page.register",
+  "ui.sidebar.register",
+  "ui.action.register",
+];
+
+describe("capability guard", () => {
+  it("declares exactly these capabilities, and no activity log, issue write, comment or relation write", () => {
+    expect([...manifest.capabilities].sort()).toEqual([...CAPABILITIES].sort());
+  });
+
+  it("declares act (off), actAfterMinutes and language", () => {
+    const props = (manifest.instanceConfigSchema as { properties: Record<string, Record<string, unknown>> }).properties;
+    expect(props.act).toMatchObject({ type: "boolean", default: false });
+    expect(props.actAfterMinutes).toMatchObject({ type: "integer", default: 30, minimum: 10 });
+    expect(props.language).toMatchObject({ type: "string", enum: ["en", "es"], default: "en" });
+    for (const key of ["act", "actAfterMinutes", "language"]) expect(String(props[key]!.title).length).toBeGreaterThan(5);
   });
 
   it("no UI file calls fetch(", () => {

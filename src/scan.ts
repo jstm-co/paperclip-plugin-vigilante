@@ -4,8 +4,10 @@
 // its record is read, rebuilt and written alone, so one company can neither
 // lose another one's data nor its own history because of a failure.
 import type { Issue, PluginContext } from "@paperclipai/plugin-sdk";
+import { actOnStoppers, type WakeBook } from "./act.js";
 import { classify, type ScanIssue } from "./classify.js";
-import { STATE_KEY, type CompanyState } from "./shared.js";
+import type { AgentRef } from "./mentions.js";
+import { DEFAULT_CONFIG, STATE_KEY, type CompanyConfig, type CompanyState } from "./shared.js";
 import { buildState, failedState, parseState, type CompanyMeta } from "./snapshot.js";
 
 /** Statuses the scan looks at. `ctx.issues.list` accepts one status per call. */
@@ -57,6 +59,12 @@ async function listOpenIssues(ctx: PluginContext, companyId: string): Promise<Is
 export interface ScanOptions {
   now?: Date;
   quietHours?: number;
+  /** This company's validated config (acting, threshold, language). Defaults to watch-only. */
+  config?: CompanyConfig;
+  /** Config lookup used by `runScan` for each company. */
+  configFor?: (companyId: string) => CompanyConfig;
+  /** Report only: never wake anyone, whatever the company's `act` says. Used by "Scan now". */
+  watchOnly?: boolean;
 }
 
 export interface CompanyOutcome {
@@ -86,6 +94,21 @@ async function readHeldBy(ctx: PluginContext, companyId: string, issues: ScanIss
     if (open.length > 0) heldBy.set(issue.id, open);
   }
   return heldBy;
+}
+
+/**
+ * The company's agents, read once per scan (`agents.read`; the call carries
+ * `companyId`, so it is admitted in the job's proactive scope). A failure only
+ * means no `waiting_agent` detection this time.
+ */
+async function listAgents(ctx: PluginContext, companyId: string): Promise<AgentRef[]> {
+  try {
+    const rows = await ctx.agents.list({ companyId });
+    return rows.map((agent) => ({ id: agent.id, name: agent.name, status: String(agent.status) }));
+  } catch (error) {
+    ctx.logger.warn("vigilante: could not list agents", { companyId, error: message(error) });
+    return [];
+  }
 }
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -125,17 +148,27 @@ export async function scanCompany(ctx: PluginContext, companyId: string, options
   const meta = await companyMeta(ctx, companyId, previous);
   if (meta.archived) return { companyId, ok: true, skipped: true };
 
+  const configured = options.config ?? options.configFor?.(companyId) ?? DEFAULT_CONFIG;
+  const config = options.watchOnly ? { ...configured, act: false } : configured;
+  // Kept outside the try: a wake that happened must be remembered even if a later step fails.
+  const book: WakeBook = { nudges: previous.nudges, wakeLog: previous.wakeLog };
+
   try {
     const issues = (await listOpenIssues(ctx, companyId)).map(toScanIssue);
+    const openIds = new Set(issues.map((issue) => issue.id));
     const heldBy = await readHeldBy(ctx, companyId, issues);
-    const stoppers = classify(issues, scannedAt.getTime(), { quietHours: options.quietHours, heldBy });
-    const next = buildState({ id: meta.id, name: meta.name, issuePrefix: meta.issuePrefix }, stoppers, previous, scannedAt, Date.now() - started);
+    const agents = await listAgents(ctx, companyId);
+    const stoppers = classify(issues, scannedAt.getTime(), { quietHours: options.quietHours, heldBy, agents, actAfterMinutes: config.actAfterMinutes });
+    // Each wake stores the record first (see act.ts); this write keeps the rest of the previous record.
+    const persist = (stored: WakeBook) => ctx.state.set(stateScope(companyId), { ...previous, nudges: stored.nudges, wakeLog: stored.wakeLog });
+    await actOnStoppers(ctx, { companyId, stoppers, agents, config, now: scannedAt, openIds, persist }, book);
+    const next = buildState({ id: meta.id, name: meta.name, issuePrefix: meta.issuePrefix }, stoppers, previous, scannedAt, Date.now() - started, book.nudges, book.wakeLog);
     await ctx.state.set(stateScope(companyId), next);
     return { companyId, ok: true };
   } catch (error) {
     const text = message(error);
     try {
-      await ctx.state.set(stateScope(companyId), failedState(previous, { companyId, companyName: meta.name, message: text }));
+      await ctx.state.set(stateScope(companyId), failedState({ ...previous, nudges: book.nudges, wakeLog: book.wakeLog }, { companyId, companyName: meta.name, message: text }));
     } catch {
       // The failure itself could not be stored; the previous record stays as it was.
     }

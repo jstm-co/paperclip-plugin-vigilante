@@ -76,7 +76,7 @@ describe("classifyIssue kinds", () => {
 
   it("d: blocked with an unblock action text -> waiting_third_party with the reason", () => {
     const r = classifyIssue(issue("1", { status: "blocked", assigneeAgentId: "a1", unblockDescriptor: { action: " Waiting for the vendor " } }));
-    expect(r).toEqual({ kind: "waiting_third_party", wouldDo: "report", reason: "Waiting for the vendor" });
+    expect(r).toMatchObject({ kind: "waiting_third_party", wouldDo: "report", reason: "Waiting for the vendor" });
   });
 
   it("d: deliberate_wait_without_target also counts", () => {
@@ -151,7 +151,7 @@ describe("classify", () => {
 
   it("reports a missing stopper as unknown with just the id", () => {
     const result = classify([blockedOn("A", "gone"), blockedOn("B", "gone")], NOW);
-    expect(result).toEqual([{ issueId: "gone", issue: null, stops: 2, quietMs: null, kind: "unknown", wouldDo: "report", reason: null, recent: false }]);
+    expect(result).toEqual([{ issueId: "gone", issue: null, stops: 2, quietMs: null, kind: "unknown", wouldDo: "report", reason: null, targetAgentId: null, targetAgentName: null, recent: false }]);
   });
 
   it("ignores a stopper with an active run", () => {
@@ -282,5 +282,75 @@ describe("open issues held by their blockers", () => {
   it("reports a blocker that is not in the list as unknown", () => {
     const result = classify([issue("T", { status: "todo" })], NOW, { heldBy: new Map([["T", ["gone"]]]) });
     expect(result).toMatchObject([{ issueId: "gone", kind: "unknown", stops: 1 }]);
+  });
+});
+
+describe("waiting_agent", () => {
+  const agents = [
+    { id: "agent-1", name: "Backend Dev", status: "idle" },
+    { id: "agent-2", name: "Tech Lead", status: "idle" },
+    { id: "agent-3", name: "QA Engineer", status: "idle" },
+  ];
+  const waiting = (action: string, quietHours: number, over: Partial<ScanIssue> = {}) =>
+    [blockedOn("dep", "s"), blockedOn("s", null, { unblockDescriptor: { action }, updatedAt: ago(quietHours), ...over })];
+
+  it("is produced only when the text names exactly one other agent", () => {
+    const one = classify(waiting("Waiting for the Tech Lead: hand the issue back", 5), NOW, { agents });
+    expect(one[0]).toMatchObject({ issueId: "s", kind: "waiting_agent", targetAgentId: "agent-2", targetAgentName: "Tech Lead", reason: "Waiting for the Tech Lead: hand the issue back" });
+    for (const text of ["Waiting for the vendor", "Waiting for Tech Lead and QA Engineer", "Waiting for Backend Dev"]) {
+      expect(classify(waiting(text, 5), NOW, { agents })[0]).toMatchObject({ kind: "waiting_third_party", wouldDo: expect.any(String), targetAgentId: null });
+    }
+  });
+
+  describe("structured unblock owner", () => {
+    const withOwner = (owner: unknown, action = "Waiting for the Tech Lead") => waiting(action, 5, { unblockDescriptor: { action, owner } as never });
+    const kindOf = (owner: unknown, action?: string) => classify(withOwner(owner, action), NOW, { agents })[0]!;
+
+    it("the board or a user is a person who must act: nobody is woken, even when the text names an agent", () => {
+      for (const owner of ["board", { userId: "user-1" }]) {
+        expect(kindOf(owner)).toMatchObject({ kind: "waiting_third_party", targetAgentId: null });
+        expect(kindOf(owner).wouldDo).not.toBe("wake_other_agent");
+      }
+    });
+
+    it("another agent of the company is the target without any text matching", () => {
+      expect(kindOf({ agentId: "agent-3" }, "Please look at the invoices")).toMatchObject({ kind: "waiting_agent", wouldDo: "wake_other_agent", targetAgentId: "agent-3", targetAgentName: "QA Engineer" });
+      // The owner wins over a different agent named in the text.
+      expect(kindOf({ agentId: "agent-3" })).toMatchObject({ targetAgentId: "agent-3" });
+    });
+
+    it("an owner that is the assignee falls back to the text; a missing owner too", () => {
+      expect(kindOf({ agentId: "agent-1" })).toMatchObject({ kind: "waiting_agent", targetAgentId: "agent-2" });
+      expect(kindOf({ agentId: "agent-1" }, "Waiting for the client")).toMatchObject({ kind: "waiting_third_party" });
+      expect(kindOf(undefined)).toMatchObject({ kind: "waiting_agent", targetAgentId: "agent-2" });
+    });
+
+    it("an owner agent that is terminated or not in the company wakes nobody", () => {
+      const gone = [...agents, { id: "agent-9", name: "Old Bot", status: "terminated" }];
+      expect(classify(withOwner({ agentId: "agent-9" }), NOW, { agents: gone })[0]).toMatchObject({ kind: "waiting_third_party", targetAgentId: null });
+      expect(kindOf({ agentId: "nope" })).toMatchObject({ kind: "waiting_third_party", targetAgentId: null });
+    });
+  });
+
+  it("keeps waiting_third_party when no agents are given", () => {
+    expect(classify(waiting("Waiting for the Tech Lead", 48), NOW)[0]).toMatchObject({ kind: "waiting_third_party", wouldDo: "report" });
+  });
+
+  it("is wait before actAfterMinutes and wake_other_agent after, recent or not", () => {
+    const at = (minutes: number, hours?: number) => classify(waiting("Waiting for Tech Lead to review", 0, { updatedAt: new Date(NOW - (hours ? hours * HOUR : minutes * 60_000)).toISOString() }), NOW, { agents })[0]!;
+    expect(at(10)).toMatchObject({ kind: "waiting_agent", recent: true, wouldDo: "wait" });
+    expect(at(29)).toMatchObject({ wouldDo: "wait" });
+    expect(at(30)).toMatchObject({ recent: true, wouldDo: "wake_other_agent" });
+    expect(at(0, 48)).toMatchObject({ recent: false, wouldDo: "wake_other_agent" });
+    const custom = (minutes: number) => classify(waiting("Waiting for Tech Lead to review", 0, { updatedAt: new Date(NOW - minutes * 60_000).toISOString() }), NOW, { agents, actAfterMinutes: 60 })[0]!;
+    expect(custom(45).wouldDo).toBe("wait");
+    expect(custom(60).wouldDo).toBe("wake_other_agent");
+  });
+
+  it("leaves the other kinds as they were", () => {
+    const issues = [blockedOn("a", "s"), issue("s", { status: "backlog", assigneeAgentId: "agent-2", updatedAt: ago(48) })];
+    expect(classify(issues, NOW, { agents })[0]).toMatchObject({ kind: "backlog_assigned", wouldDo: "promote_to_todo" });
+    const recent = [blockedOn("a", "s"), issue("s", { status: "backlog", assigneeAgentId: "agent-2", updatedAt: ago(2) })];
+    expect(classify(recent, NOW, { agents })[0]).toMatchObject({ kind: "backlog_assigned", wouldDo: "wait" });
   });
 });
