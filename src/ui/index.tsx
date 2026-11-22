@@ -8,7 +8,7 @@ import {
   type PluginSidebarProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { detectLocale, formatDuration, translate, type Locale, type MessageKey } from "../i18n.js";
-import { ACTION_SCAN_NOW, DATA_REPORT, PAGE_ROUTE, type CompanySnapshot, type Report, type StopperView } from "../shared.js";
+import { ACTION_SCAN_NOW, DATA_REPORT, MAX_NUDGES_PER_STOPPER, PAGE_ROUTE, type CompanySnapshot, type Report, type StopperView } from "../shared.js";
 import { ensureStyles } from "./styles.js";
 
 function useTr() {
@@ -93,20 +93,68 @@ function StopperRow({ company, stopper, locale, tr }: { company: CompanySnapshot
       <td>{tr(`kind.${stopper.kind}`)}</td>
       <td>{stopper.quietMs === null ? "–" : formatDuration(locale, stopper.quietMs)}</td>
       <td>{stopper.stops}</td>
-      <td>{tr(`do.${stopper.wouldDo}`)}</td>
+      <td>
+        {tr(`do.${stopper.wouldDo}`, { name: stopper.targetAgentName ?? "?" })}
+        <NudgeNote stopper={stopper} locale={locale} tr={tr} />
+      </td>
       <td title={stuckSince.toLocaleString(locale)}>{formatDuration(locale, Math.max(0, Date.now() - stuckSince.getTime()))}</td>
     </tr>
   );
 }
 
-function CompanyTable({ company, locale, tr }: { company: CompanySnapshot; locale: Locale; tr: ReturnType<typeof useTr>["tr"] }) {
-  if (company.stoppers.length === 0) return null;
+/** What was done about a `waiting_agent` stopper: the last attempt, a skip or a failure. */
+function NudgeNote({ stopper, locale, tr }: { stopper: StopperView; locale: Locale; tr: ReturnType<typeof useTr>["tr"] }) {
+  const nudge = stopper.nudge;
+  if (stopper.kind !== "waiting_agent" || !nudge) return null;
+  const lines: string[] = [];
+  if (nudge.count > 0) {
+    const at = Date.parse(nudge.lastAt);
+    const values = { name: nudge.targetAgentName, ago: Number.isNaN(at) ? "?" : formatDuration(locale, Math.max(0, Date.now() - at)), k: nudge.count, max: MAX_NUDGES_PER_STOPPER };
+    if (nudge.state === "failed") lines.push(tr("nudge.failedAttempt", { ...values, message: nudge.lastError ?? "?" }));
+    else if (nudge.state === "attempted") lines.push(tr("nudge.attempted", values));
+    else lines.push(tr("nudge.woke", values));
+    if (nudge.count >= MAX_NUDGES_PER_STOPPER) lines.push(tr("nudge.limit", { max: MAX_NUDGES_PER_STOPPER }));
+  }
+  const name = nudge.targetAgentName;
+  if (nudge.lastSkip === "scan_cap") lines.push(tr("nudge.scanCap"));
+  else if (nudge.lastSkip === "agent_gap") lines.push(tr("nudge.agentGap", { name }));
+  else if (nudge.lastSkip === "agent_day") lines.push(tr("nudge.agentDay", { name }));
+  else if (nudge.lastSkip === "company_day") lines.push(tr("nudge.companyDay"));
+  else if (nudge.lastSkip?.startsWith("not_idle:")) lines.push(tr("nudge.notIdle", { name, status: nudge.lastSkip.slice("not_idle:".length) }));
+  return (
+    <>
+      {lines.map((line) => (
+        <span key={line} className="vg-reason">
+          {line}
+        </span>
+      ))}
+    </>
+  );
+}
+
+type TableProps = { company: CompanySnapshot; locale: Locale; tr: ReturnType<typeof useTr>["tr"] };
+
+/** Long-quiet stoppers first; the ones that moved recently go in their own table below. */
+function CompanyTable({ company, locale, tr }: TableProps) {
+  const quiet = company.stoppers.filter((stopper) => !stopper.recent);
+  const recent = company.stoppers.filter((stopper) => stopper.recent);
+  return (
+    <>
+      <StopperTable company={company} locale={locale} tr={tr} stoppers={quiet} title={tr("sectionQuiet")} />
+      <StopperTable company={company} locale={locale} tr={tr} stoppers={recent} title={tr("sectionRecent")} note={tr("recentNote")} />
+    </>
+  );
+}
+
+function StopperTable({ company, locale, tr, stoppers, title, note }: TableProps & { stoppers: StopperView[]; title: string; note?: string }) {
+  if (stoppers.length === 0) return null;
   return (
     <section>
       <h2 className="vg-company">
-        {company.name}
-        <span className="vg-count vg-muted">{tr(company.stoppers.length === 1 ? "issues.one" : "issues.many", { n: company.stoppers.length })}</span>
+        {title}
+        <span className="vg-count vg-muted">{tr(stoppers.length === 1 ? "issues.one" : "issues.many", { n: stoppers.length })}</span>
       </h2>
+      {note ? <p className="vg-muted vg-note">{note}</p> : null}
       <div className="vg-wrap">
         <table>
           <thead>
@@ -120,7 +168,7 @@ function CompanyTable({ company, locale, tr }: { company: CompanySnapshot; local
             </tr>
           </thead>
           <tbody>
-            {company.stoppers.map((stopper) => (
+            {stoppers.map((stopper) => (
               <StopperRow key={stopper.issueId} company={company} stopper={stopper} locale={locale} tr={tr} />
             ))}
           </tbody>
@@ -175,7 +223,7 @@ export function VigilantePage({ context }: PluginPageProps) {
       </div>
 
       <div className="vg-banner" role="note">
-        {tr("banner")}
+        {tr(data ? (data.act ? "bannerAct" : "banner") : "bannerUnknown")}
       </div>
       {data && !data.enabled ? (
         <div className="vg-banner" role="note">

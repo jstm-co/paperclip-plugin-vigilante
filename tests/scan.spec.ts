@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyConfig, registerHandlers } from "../src/handlers.js";
 import { runScan, scanCompany, stateScope, toScanIssue } from "../src/scan.js";
-import { ACTION_SCAN_NOW, DATA_REPORT, JOB_SCAN, type CompanyState, type Report } from "../src/shared.js";
+import { ACTION_SCAN_NOW, DATA_REPORT, JOB_SCAN, type CompanyConfig, type CompanyState, type Report } from "../src/shared.js";
 import { blockedRow, fakeCtx, hoursAgo, NOW, row, type FakeCompany } from "./fake-ctx.js";
 
 const NOW_DATE = new Date(NOW);
@@ -44,11 +44,15 @@ describe("scanCompany", () => {
     expect(read(store, "c-acme")!.company!.stoppers).toMatchObject([{ issueId: "x", kind: "blocked_unexplained", wouldDo: "wake_assignee" }]);
   });
 
-  it("skips the other statuses when no blocked row needs attention", async () => {
-    const covered = row("c", { status: "blocked", blockerAttention: { state: "covered", unresolvedBlockerCount: 1, terminalBlockerIssueId: "z" } });
-    const { ctx, calls } = fakeCtx([acme({ issues: [covered, row("s1", { status: "backlog" })] })]);
+  it("finds what holds a todo issue that is not blocked, reading relations only for open issues with an agent", async () => {
+    const held = row("t", { status: "todo", assigneeAgentId: "a1", blockedByIds: ["b", "closed"] });
+    const free = row("f", { status: "in_progress", assigneeAgentId: "a1" });
+    const noAgent = row("n", { status: "todo", assigneeAgentId: null, blockedByIds: ["b"] });
+    const issues = [held, free, noAgent, row("b", { status: "backlog", assigneeAgentId: "a1" }), row("closed", { status: "done" })];
+    const { ctx, calls, store } = fakeCtx([acme({ issues })]);
     await scanCompany(ctx, "c-acme", { now: NOW_DATE });
-    expect(calls.filter((c) => c.startsWith("issues.list"))).toEqual(["issues.list:c-acme:blocked"]);
+    expect(calls.filter((c) => c.startsWith("issues.relations.get")).sort()).toEqual(["issues.relations.get:f", "issues.relations.get:t"]);
+    expect(read(store, "c-acme")!.company!.stoppers).toMatchObject([{ issueId: "b", stops: 1, kind: "backlog_assigned" }]);
   });
 
   it("keeps the first-seen time across scans", async () => {
@@ -103,7 +107,8 @@ describe("runScan", () => {
 describe("handlers", () => {
   function setup(companies: FakeCompany[], enabledIds: string[]) {
     const fake = fakeCtx(companies);
-    const enabled = new Set(enabledIds);
+    const enabled = new Map<string, CompanyConfig>();
+    for (const id of enabledIds) applyConfig(enabled, { enabled: true }, id);
     registerHandlers(fake.ctx, enabled);
     const job = () => fake.handlers.jobs.get(JOB_SCAN)!({ jobKey: JOB_SCAN });
     const action = (p: Record<string, unknown>) => fake.handlers.actions.get(ACTION_SCAN_NOW)!(p);
@@ -159,9 +164,9 @@ describe("handlers", () => {
     expect(r.enabled).toBe(true);
     expect(r.company!.id).toBe("c-acme");
     expect(JSON.stringify(r)).not.toContain("Globex");
-    t.enabled.delete("c-acme");
+    applyConfig(t.enabled, { enabled: false }, "c-acme");
     expect((await t.report({ companyId: "c-acme" })).enabled).toBe(false);
-    expect(await t.report({ companyId: "c-unknown" })).toEqual({ enabled: false, company: null, errors: [] });
+    expect(await t.report({ companyId: "c-unknown" })).toEqual({ enabled: false, act: false, company: null, errors: [] });
   });
 
   it("stateScope is company scoped", () => {
@@ -170,14 +175,16 @@ describe("handlers", () => {
 });
 
 describe("applyConfig", () => {
-  it("adds, removes and ignores instance-level saves", () => {
-    const set = new Set<string>();
-    applyConfig(set, { enabled: true }, "c1");
-    applyConfig(set, { enabled: true }, "c2");
-    applyConfig(set, { enabled: false }, "c2");
-    applyConfig(set, { enabled: true }, null);
-    applyConfig(set, {}, "c3");
-    expect([...set]).toEqual(["c1"]);
+  it("keeps the config of every company, with invalid values falling back to defaults", () => {
+    const map = new Map<string, CompanyConfig>();
+    applyConfig(map, { enabled: true, act: true, actAfterMinutes: 45, language: "es" }, "c1");
+    applyConfig(map, { enabled: true, act: "yes", actAfterMinutes: 5, language: "fr" }, "c2");
+    applyConfig(map, { actAfterMinutes: 12.5 }, "c3");
+    applyConfig(map, { enabled: true }, null);
+    expect(map.get("c1")).toEqual({ enabled: true, act: true, actAfterMinutes: 45, language: "es" });
+    expect(map.get("c2")).toEqual({ enabled: true, act: false, actAfterMinutes: 30, language: "en" });
+    expect(map.get("c3")).toEqual({ enabled: false, act: false, actAfterMinutes: 30, language: "en" });
+    expect(map.size).toBe(3);
   });
 });
 

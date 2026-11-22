@@ -2,7 +2,7 @@
   "name": "paperclip-plugin-vigilante",
   "version": "0.1.0",
   "type": "module",
-  "description": "Watches blocked-issue chains in Paperclip and reports the stopper issue nobody moves (watch-only in v1)",
+  "description": "Paperclip plugin that watches chains of blocked issues, reports the one nobody moves and, opt-in, wakes the agent another agent is waiting for.",
   "homepage": "https://github.com/jstm-co/paperclip-plugin-vigilante#readme",
   "repository": {
     "type": "git",
