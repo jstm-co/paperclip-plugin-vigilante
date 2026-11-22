@@ -4,10 +4,10 @@
 // its record is read, rebuilt and written alone, so one company can neither
 // lose another one's data nor its own history because of a failure.
 import type { Issue, PluginContext } from "@paperclipai/plugin-sdk";
-import { actOnStoppers } from "./act.js";
+import { actOnStoppers, type WakeBook } from "./act.js";
 import { classify, type ScanIssue } from "./classify.js";
 import type { AgentRef } from "./mentions.js";
-import { DEFAULT_CONFIG, STATE_KEY, type CompanyConfig, type CompanyState, type NudgeInfo } from "./shared.js";
+import { DEFAULT_CONFIG, STATE_KEY, type CompanyConfig, type CompanyState } from "./shared.js";
 import { buildState, failedState, parseState, type CompanyMeta } from "./snapshot.js";
 
 /** Statuses the scan looks at. `ctx.issues.list` accepts one status per call. */
@@ -63,6 +63,8 @@ export interface ScanOptions {
   config?: CompanyConfig;
   /** Config lookup used by `runScan` for each company. */
   configFor?: (companyId: string) => CompanyConfig;
+  /** Report only: never wake anyone, whatever the company's `act` says. Used by "Scan now". */
+  watchOnly?: boolean;
 }
 
 export interface CompanyOutcome {
@@ -146,23 +148,27 @@ export async function scanCompany(ctx: PluginContext, companyId: string, options
   const meta = await companyMeta(ctx, companyId, previous);
   if (meta.archived) return { companyId, ok: true, skipped: true };
 
-  const config = options.config ?? options.configFor?.(companyId) ?? DEFAULT_CONFIG;
+  const configured = options.config ?? options.configFor?.(companyId) ?? DEFAULT_CONFIG;
+  const config = options.watchOnly ? { ...configured, act: false } : configured;
   // Kept outside the try: a wake that happened must be remembered even if a later step fails.
-  let nudges: Record<string, NudgeInfo> = previous.nudges;
+  const book: WakeBook = { nudges: previous.nudges, wakeLog: previous.wakeLog };
 
   try {
     const issues = (await listOpenIssues(ctx, companyId)).map(toScanIssue);
+    const openIds = new Set(issues.map((issue) => issue.id));
     const heldBy = await readHeldBy(ctx, companyId, issues);
     const agents = await listAgents(ctx, companyId);
     const stoppers = classify(issues, scannedAt.getTime(), { quietHours: options.quietHours, heldBy, agents, actAfterMinutes: config.actAfterMinutes });
-    nudges = await actOnStoppers(ctx, companyId, stoppers, agents, previous.nudges, config, scannedAt);
-    const next = buildState({ id: meta.id, name: meta.name, issuePrefix: meta.issuePrefix }, stoppers, previous, scannedAt, Date.now() - started, nudges);
+    // Each wake stores the record first (see act.ts); this write keeps the rest of the previous record.
+    const persist = (stored: WakeBook) => ctx.state.set(stateScope(companyId), { ...previous, nudges: stored.nudges, wakeLog: stored.wakeLog });
+    await actOnStoppers(ctx, { companyId, stoppers, agents, config, now: scannedAt, openIds, persist }, book);
+    const next = buildState({ id: meta.id, name: meta.name, issuePrefix: meta.issuePrefix }, stoppers, previous, scannedAt, Date.now() - started, book.nudges, book.wakeLog);
     await ctx.state.set(stateScope(companyId), next);
     return { companyId, ok: true };
   } catch (error) {
     const text = message(error);
     try {
-      await ctx.state.set(stateScope(companyId), failedState({ ...previous, nudges }, { companyId, companyName: meta.name, message: text }));
+      await ctx.state.set(stateScope(companyId), failedState({ ...previous, nudges: book.nudges, wakeLog: book.wakeLog }, { companyId, companyName: meta.name, message: text }));
     } catch {
       // The failure itself could not be stored; the previous record stays as it was.
     }

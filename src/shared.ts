@@ -14,10 +14,27 @@ export const CONFIG_ACT = "act";
 export const CONFIG_ACT_AFTER = "actAfterMinutes";
 export const CONFIG_LANGUAGE = "language";
 
-/** Limits of the only action the plugin has. */
+/**
+ * Limits of the only action the plugin has. All of them are enforced from the
+ * company's stored record, and an attempt counts whether the invoke worked,
+ * threw or timed out.
+ */
+/** Minimum time between two wakes counted for the same stopper. */
 export const NUDGE_SPACING_MS = 24 * 3_600_000;
+/** Wakes per stopper for the whole life of its record. */
 export const MAX_NUDGES_PER_STOPPER = 3;
+/** `agents.invoke` calls per company and scan. */
 export const MAX_NUDGES_PER_SCAN = 5;
+/** Minimum time between two wakes of the same target agent. */
+export const NUDGE_AGENT_SPACING_MS = 60 * 60_000;
+/** Wakes of the same target agent in any rolling 24 hours. */
+export const MAX_NUDGES_PER_AGENT_DAY = 6;
+/** Wakes in the whole company in any rolling 24 hours. */
+export const MAX_NUDGES_PER_COMPANY_DAY = 20;
+/** The rolling window of the two caps above. */
+export const NUDGE_WINDOW_MS = 24 * 3_600_000;
+/** A wake record is dropped this long after its last wake, or as soon as the issue leaves the open lists. */
+export const NUDGE_RECORD_TTL_MS = 14 * 24 * 3_600_000;
 
 /** The per-company configuration, already validated. */
 export interface CompanyConfig {
@@ -42,19 +59,30 @@ export function parseConfig(config: Record<string, unknown> | null | undefined):
   };
 }
 
+/** How the last counted wake ended: not known yet, accepted by the host, or failed. */
+export type NudgeState = "attempted" | "woken" | "failed";
+
 /** What the plugin did (or could not do) about one stopper. */
 export interface NudgeInfo {
-  /** Successful wakes so far while the issue stays stuck. */
+  /** Wake attempts so far (counted before the invoke, whatever its outcome). */
   count: number;
-  /** ISO time of the last successful wake. */
+  /** ISO time of the last attempt. */
   lastAt: string;
   targetAgentId: string;
   targetAgentName: string;
+  /** Outcome of the last attempt; missing in records written by older versions. */
+  state?: NudgeState;
   lastRunId?: string;
-  /** Message of the last failed wake (not counted). */
+  /** Message of the last failed attempt (it still counts). */
   lastError?: string;
-  /** Why the last scan did not wake: `not_idle:<status>` or `scan_cap`. */
+  /** Why the last scan did not wake: `not_idle:<status>`, `scan_cap`, `agent_gap`, `agent_day` or `company_day`. */
   lastSkip?: string;
+}
+
+/** One counted wake of a target agent, kept for the rolling per-agent and per-company caps. */
+export interface WakeLogEntry {
+  at: string;
+  agentId: string;
 }
 
 /** A stopper as stored in the snapshot and shown by the UI. */
@@ -104,8 +132,10 @@ export interface CompanyState {
   company: CompanySnapshot | null;
   /** `firstSeen[issueId]`: ISO time of the first scan that saw the issue stuck. */
   firstSeen: Record<string, string>;
-  /** `nudges[issueId]`: dropped when the issue stops being a stopper. */
+  /** `nudges[issueId]`: kept until the issue leaves the open lists or 14 days after its last wake. */
   nudges: Record<string, NudgeInfo>;
+  /** Counted wakes of the last 24 hours (pruned on every scan). */
+  wakeLog: WakeLogEntry[];
   /** Errors of the last scan attempt; empty after a good one. */
   errors: ScanError[];
 }

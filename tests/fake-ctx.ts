@@ -13,12 +13,9 @@ export interface FakeCompany {
   agents?: Array<{ id: string; name: string; status: string }>;
   /** Make `agents.invoke` throw this for the given agent ids. */
   failInvoke?: Record<string, string>;
-  /** Make every `activity.log` call of this company fail. */
-  failActivity?: boolean;
 }
 
 export interface Invoke { agentId: string; companyId: string; prompt: string; reason?: string }
-export interface Activity { companyId: string; message: string; entityType?: string; entityId?: string; metadata?: Record<string, unknown> }
 
 export function fakeCtx(companies: FakeCompany[]) {
   const calls: string[] = [];
@@ -26,7 +23,6 @@ export function fakeCtx(companies: FakeCompany[]) {
   const handlers = { jobs: new Map<string, (job: unknown) => Promise<void>>(), actions: new Map<string, (p: Record<string, unknown>) => Promise<unknown>>(), data: new Map<string, (p: Record<string, unknown>) => Promise<unknown>>() };
   const keyOf = (scope: { scopeKind: string; scopeId?: string; stateKey: string }) => `${scope.scopeKind}/${scope.scopeId ?? ""}/${scope.stateKey}`;
   const invokes: Invoke[] = [];
-  const activities: Activity[] = [];
   const find = (id: string) => companies.find((c) => c.id === id);
 
   const ctx = {
@@ -83,13 +79,6 @@ export function fakeCtx(companies: FakeCompany[]) {
         return { runId: `run-${invokes.length}` };
       },
     },
-    activity: {
-      async log(entry: Activity) {
-        calls.push(`activity.log:${entry.companyId}`);
-        if (find(entry.companyId)?.failActivity) throw new Error("activity down");
-        activities.push(entry);
-      },
-    },
     state: {
       async get(scope: { scopeKind: string; scopeId?: string; stateKey: string }) {
         calls.push(`state.get:${scope.scopeId ?? ""}`);
@@ -107,7 +96,7 @@ export function fakeCtx(companies: FakeCompany[]) {
     actions: { register: (key: string, fn: (p: Record<string, unknown>) => Promise<unknown>) => void handlers.actions.set(key, fn) },
     data: { register: (key: string, fn: (p: Record<string, unknown>) => Promise<unknown>) => void handlers.data.set(key, fn) },
   };
-  return { ctx: ctx as unknown as PluginContext, calls, store, handlers, invokes, activities };
+  return { ctx: ctx as unknown as PluginContext, calls, store, handlers, invokes };
 }
 
 const NOW = Date.parse("2026-03-10T12:00:00Z");
@@ -132,16 +121,18 @@ export function blockedRow(id: string, terminal: string, over: Record<string, un
 export const agent = (id: string, name: string, status = "idle") => ({ id, name, status });
 
 /**
- * A blocked stopper held by `agent-1` whose explanation text is `action`, quiet for `quietHours`,
+ * A blocked stopper held by `agent-1` whose explanation text is `action` and whose unblock owner is
+ * `owner` (the assignee by default; pass `undefined` for no owner), quiet for `quietHours`,
  * with one other blocked issue hanging from it.
  */
-export function waitingRows(id: string, action: string, quietHours: number) {
+export function waitingRows(id: string, action: string, quietHours: number, owner: unknown = { agentId: "agent-1" }) {
   return [
     blockedRow(`${id}-dep`, id),
     row(id, {
       status: "blocked",
       assigneeAgentId: "agent-1",
-      unblockDescriptor: { action },
+      // Like the host's list rows: agents often set themselves as owner, so the text decides unless `owner` says otherwise.
+      unblockDescriptor: owner === undefined ? { action } : { owner, action },
       blockerAttention: { state: "needs_attention", unresolvedBlockerCount: 0, terminalBlockerIssueId: null },
       updatedAt: hoursAgo(quietHours),
     }),

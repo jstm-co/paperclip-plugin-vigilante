@@ -17,6 +17,9 @@ export type StopperKind =
 
 export type WouldDo = "none" | "wait" | "report" | "promote_to_todo" | "wake_assignee" | "wake_other_agent";
 
+/** Who has to act on a blocked issue, as the host stores it. */
+export type UnblockOwner = { agentId?: string | null; userId?: string | null } | "board";
+
 /** Minimal shape of an issue the classifier needs. Timestamps are ISO strings. */
 export interface ScanIssue {
   id: string;
@@ -35,7 +38,8 @@ export interface ScanIssue {
     terminalBlockerIssueId?: string | null;
     directBlockerIssueId?: string | null;
   } | null;
-  unblockDescriptor?: { action?: string | null } | null;
+  /** `owner` is the host's structured owner: an agent, a user or the board. */
+  unblockDescriptor?: { action?: string | null; owner?: UnblockOwner | null } | null;
   activeRecoveryAction?: { kind?: string | null; status?: string | null } | null;
   activeRun?: unknown;
 }
@@ -158,6 +162,19 @@ export function classifyIssue(issue: ScanIssue, agents: readonly AgentRef[] = []
     const action = text(issue.unblockDescriptor?.action);
     const kind = activeActionKind(issue);
     if (action) {
+      const owner = issue.unblockDescriptor?.owner;
+      const objectOwner = owner && typeof owner === "object" ? owner : null;
+      // A person must act (the board or a user): never wake anyone.
+      if (owner === "board" || (typeof objectOwner?.userId === "string" && objectOwner.userId.length > 0)) {
+        return verdict("waiting_third_party", "report", action);
+      }
+      const ownerAgentId = typeof objectOwner?.agentId === "string" && objectOwner.agentId.length > 0 ? objectOwner.agentId : null;
+      // A structured owner other than the assignee is the target; no text matching needed.
+      if (ownerAgentId && ownerAgentId !== issue.assigneeAgentId) {
+        const target = agents.find((agent) => agent.id === ownerAgentId && agent.status !== "terminated");
+        return target ? verdict("waiting_agent", "wake_other_agent", action, target) : verdict("waiting_third_party", "report", action);
+      }
+      // No owner, or the assignee itself (agents often set themselves): fall back to the text.
       const mention = findMentionedAgent(action, agents, issue.assigneeAgentId);
       if (mention.kind === "one") return verdict("waiting_agent", "wake_other_agent", action, mention.agent);
     }

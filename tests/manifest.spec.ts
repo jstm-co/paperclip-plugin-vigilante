@@ -22,17 +22,24 @@ describe("manifest", () => {
   });
 });
 
-const ALLOWED_WRITES = ["plugin.state.write", "agents.invoke", "activity.log.write"];
+// The exact list: any addition (or removal) must be a deliberate edit of this test.
+const CAPABILITIES = [
+  "companies.read",
+  "issues.read",
+  "issue.relations.read",
+  "jobs.schedule",
+  "plugin.state.read",
+  "plugin.state.write",
+  "agents.read",
+  "agents.invoke",
+  "ui.page.register",
+  "ui.sidebar.register",
+  "ui.action.register",
+];
 
 describe("capability guard", () => {
-  it("has no write capability besides state, agents.invoke and activity.log.write", () => {
-    const writes = manifest.capabilities.filter(
-      (c) => !ALLOWED_WRITES.includes(c) && (/\.write$/.test(c) || /\.(update|create|delete|wakeup|set|add|remove|send|invoke|pause|resume)\b/.test(c) || c.startsWith("agent.") || c.startsWith("agents.") && c !== "agents.read"),
-    );
-    expect(writes).toEqual([]);
-    for (const wanted of ALLOWED_WRITES) expect(manifest.capabilities).toContain(wanted);
-    expect(manifest.capabilities).toContain("agents.read");
-    for (const banned of ["issues.update", "issues.wakeup", "issue.comments.create", "issue.relations.write"]) expect(manifest.capabilities).not.toContain(banned);
+  it("declares exactly these capabilities, and no activity log, issue write, comment or relation write", () => {
+    expect([...manifest.capabilities].sort()).toEqual([...CAPABILITIES].sort());
   });
 
   it("declares act (off), actAfterMinutes and language", () => {

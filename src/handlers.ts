@@ -40,10 +40,12 @@ export function registerHandlers(ctx: PluginContext, configs: ReadonlyMap<string
     for (const outcome of outcomes) if (!outcome.ok) ctx.logger.warn("vigilante: scan failed for a company", { companyId: outcome.companyId, error: outcome.error });
   });
 
-  // "Scan now" rescans only the company the user is looking at, even with its switch off; it acts when `act` is on.
+  // "Scan now" rescans only the company the user is looking at, even with its switch off. It only
+  // reports: acting belongs to the scheduled job (a page action has a 30-second host timeout and would
+  // sidestep the per-scan cap).
   ctx.actions.register(ACTION_SCAN_NOW, async (params) => {
     const companyId = requireCompanyId(params);
-    const [outcome] = await serialized(() => runScan(ctx, [companyId], { configFor }));
+    const [outcome] = await serialized(() => runScan(ctx, [companyId], { configFor, watchOnly: true }));
     if (outcome && !outcome.ok) throw new Error(outcome.error ?? "scan failed");
     return { ok: true };
   });

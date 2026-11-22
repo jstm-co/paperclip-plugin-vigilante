@@ -1,8 +1,8 @@
 // Pure helpers to build the per-company stored record and keep `firstSeenAt` across scans.
 import type { Stopper } from "./classify.js";
-import type { CompanySnapshot, CompanyState, NudgeInfo, ScanError, StopperView } from "./shared.js";
+import type { CompanySnapshot, CompanyState, NudgeInfo, ScanError, StopperView, WakeLogEntry } from "./shared.js";
 
-export const EMPTY_STATE: CompanyState = { company: null, firstSeen: {}, nudges: {}, errors: [] };
+export const EMPTY_STATE: CompanyState = { company: null, firstSeen: {}, nudges: {}, wakeLog: [], errors: [] };
 
 /**
  * Keeps the entry of every issue still stuck, adds new ones with `nowIso` and
@@ -40,31 +40,34 @@ export interface CompanyMeta {
 }
 
 /** The record after a scan of the company finished well. */
-export function buildState(meta: CompanyMeta, stoppers: Stopper[], previous: CompanyState, scannedAt: Date, durationMs: number, nudges: Record<string, NudgeInfo> = {}): CompanyState {
+export function buildState(
+  meta: CompanyMeta,
+  stoppers: Stopper[],
+  previous: CompanyState,
+  scannedAt: Date,
+  durationMs: number,
+  nudges: Record<string, NudgeInfo> = {},
+  wakeLog: WakeLogEntry[] = [],
+): CompanyState {
   const nowIso = scannedAt.toISOString();
   const firstSeen = mergeFirstSeen(
     previous.firstSeen,
     stoppers.map((s) => s.issueId),
     nowIso,
   );
-  // Same lifecycle as first-seen: only issues that are still stoppers keep a record.
-  const keptNudges: Record<string, NudgeInfo> = {};
-  for (const stopper of stoppers) {
-    const nudge = nudges[stopper.issueId];
-    if (nudge) keptNudges[stopper.issueId] = nudge;
-  }
+  // Wake records outlive the stopper (see `pruneNudges` in act.ts): all of them are kept here.
   const company: CompanySnapshot = {
     ...meta,
     scannedAt: nowIso,
     durationMs,
-    stoppers: stoppers.map((s) => toStopperView(s, firstSeen[s.issueId]!, keptNudges[s.issueId] ?? null)),
+    stoppers: stoppers.map((s) => toStopperView(s, firstSeen[s.issueId]!, nudges[s.issueId] ?? null)),
   };
-  return { company, firstSeen, nudges: keptNudges, errors: [] };
+  return { company, firstSeen, nudges, wakeLog, errors: [] };
 }
 
 /** The record after a failed scan: everything seen before is kept, only the errors change. */
 export function failedState(previous: CompanyState, error: ScanError): CompanyState {
-  return { company: previous.company, firstSeen: previous.firstSeen, nudges: previous.nudges, errors: [error] };
+  return { company: previous.company, firstSeen: previous.firstSeen, nudges: previous.nudges, wakeLog: previous.wakeLog, errors: [error] };
 }
 
 function parseNudge(value: unknown): NudgeInfo | null {
@@ -76,10 +79,23 @@ function parseNudge(value: unknown): NudgeInfo | null {
     lastAt: typeof n.lastAt === "string" ? n.lastAt : "",
     targetAgentId: n.targetAgentId,
     targetAgentName: n.targetAgentName,
+    ...(n.state === "attempted" || n.state === "woken" || n.state === "failed" ? { state: n.state } : {}),
     ...(typeof n.lastRunId === "string" ? { lastRunId: n.lastRunId } : {}),
     ...(typeof n.lastError === "string" ? { lastError: n.lastError } : {}),
     ...(typeof n.lastSkip === "string" ? { lastSkip: n.lastSkip } : {}),
   };
+}
+
+function parseWakeLog(value: unknown): WakeLogEntry[] {
+  if (!Array.isArray(value)) return [];
+  const entries: WakeLogEntry[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const e = item as Partial<WakeLogEntry>;
+    // An unparseable time is kept as is: the caps read it as "just now".
+    if (typeof e.agentId === "string") entries.push({ at: typeof e.at === "string" ? e.at : "", agentId: e.agentId });
+  }
+  return entries;
 }
 
 function parseStopper(value: unknown): StopperView | null {
@@ -109,8 +125,8 @@ function parseError(value: unknown): ScanError | null {
 
 /** Defensive read of what `ctx.state` returned: lists are always arrays. */
 export function parseState(value: unknown): CompanyState {
-  if (!value || typeof value !== "object") return { company: null, firstSeen: {}, nudges: {}, errors: [] };
-  const raw = value as { company?: unknown; firstSeen?: unknown; nudges?: unknown; errors?: unknown };
+  if (!value || typeof value !== "object") return { company: null, firstSeen: {}, nudges: {}, wakeLog: [], errors: [] };
+  const raw = value as { company?: unknown; firstSeen?: unknown; nudges?: unknown; wakeLog?: unknown; errors?: unknown };
 
   let company: CompanySnapshot | null = null;
   if (raw.company && typeof raw.company === "object") {
@@ -141,5 +157,5 @@ export function parseState(value: unknown): CompanyState {
   }
 
   const errors = Array.isArray(raw.errors) ? raw.errors.map(parseError).filter((e): e is ScanError => e !== null) : [];
-  return { company, firstSeen, nudges, errors };
+  return { company, firstSeen, nudges, wakeLog: parseWakeLog(raw.wakeLog), errors };
 }

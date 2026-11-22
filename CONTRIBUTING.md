@@ -36,7 +36,7 @@ Thanks for helping. Every change goes through a pull request: nobody pushes to `
 - **No data from your instance:** no real company names, emails, IDs, URLs or screenshots of private data in code, tests or the pull request. Use made-up companies, like the tests do (Acme, Globex).
 - **Tests:** the logic outside React (`src/classify.ts`, `src/mentions.ts`, `src/prompt.ts`, `src/act.ts`, `src/snapshot.ts`, `src/scan.ts`, `src/handlers.ts`) has tests in `tests/`. Add or update them with your change.
 - **Do not develop on the instance you use every day:** Paperclip serves the interface from `dist/ui/` of the installed folder, so a build there changes what users see right away. Install from a separate copy.
-- **Acting features are opt-in per company, capped, and never edit issues:** do not add write capabilities (`issues.update`, `issues.wakeup`, comments, relation writes) to the manifest, and discuss any new one first. A test fails if an unexpected one appears.
+- **Acting features are opt-in per company, capped, and never edit issues:** do not add write capabilities (`issues.update`, `issues.wakeup`, comments, relation writes) to the manifest, and discuss any new one first. A test asserts the exact capability list, so any addition fails it. In particular there is no activity-log capability on purpose: activity rows count toward an issue's last activity and would corrupt the quiet measurement.
 
 ## Reporting a bug
 
@@ -82,7 +82,7 @@ Gracias por ayudar. Todo cambio entra por un pull request: nadie sube directo a 
 - **Nada de tu instancia:** ni nombres reales de empresas, correos, IDs, URLs ni capturas con datos privados en el código, las pruebas o el pull request. Usa empresas inventadas, como las pruebas (Acme, Globex).
 - **Pruebas:** la lógica fuera de React (`src/classify.ts`, `src/mentions.ts`, `src/prompt.ts`, `src/act.ts`, `src/snapshot.ts`, `src/scan.ts`, `src/handlers.ts`) tiene pruebas en `tests/`. Agrégalas o ajústalas con tu cambio.
 - **No desarrolles sobre la instancia que usas a diario:** Paperclip sirve la interfaz desde `dist/ui/` de la carpeta instalada, así que un build ahí cambia de inmediato lo que ven los usuarios. Instala desde una copia aparte.
-- **Las funciones que actúan son opcionales por empresa, con tope y nunca editan tareas:** no agregues capacidades de escritura (`issues.update`, `issues.wakeup`, comentarios, escritura de relaciones) al manifiesto, y habla antes cualquier capacidad nueva. Una prueba falla si aparece una inesperada.
+- **Las funciones que actúan son opcionales por empresa, con tope y nunca editan tareas:** no agregues capacidades de escritura (`issues.update`, `issues.wakeup`, comentarios, escritura de relaciones) al manifiesto, y habla antes cualquier capacidad nueva. Una prueba verifica la lista exacta de capacidades, así que cualquier adición la hace fallar. En particular no hay capacidad de registro de actividad a propósito: las filas de actividad cuentan como última actividad de la tarea y arruinarían la medición de quietud.
 
 ### Reportar un error
 

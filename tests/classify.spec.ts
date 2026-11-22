@@ -302,17 +302,47 @@ describe("waiting_agent", () => {
     }
   });
 
+  describe("structured unblock owner", () => {
+    const withOwner = (owner: unknown, action = "Waiting for the Tech Lead") => waiting(action, 5, { unblockDescriptor: { action, owner } as never });
+    const kindOf = (owner: unknown, action?: string) => classify(withOwner(owner, action), NOW, { agents })[0]!;
+
+    it("the board or a user is a person who must act: nobody is woken, even when the text names an agent", () => {
+      for (const owner of ["board", { userId: "user-1" }]) {
+        expect(kindOf(owner)).toMatchObject({ kind: "waiting_third_party", targetAgentId: null });
+        expect(kindOf(owner).wouldDo).not.toBe("wake_other_agent");
+      }
+    });
+
+    it("another agent of the company is the target without any text matching", () => {
+      expect(kindOf({ agentId: "agent-3" }, "Please look at the invoices")).toMatchObject({ kind: "waiting_agent", wouldDo: "wake_other_agent", targetAgentId: "agent-3", targetAgentName: "QA Engineer" });
+      // The owner wins over a different agent named in the text.
+      expect(kindOf({ agentId: "agent-3" })).toMatchObject({ targetAgentId: "agent-3" });
+    });
+
+    it("an owner that is the assignee falls back to the text; a missing owner too", () => {
+      expect(kindOf({ agentId: "agent-1" })).toMatchObject({ kind: "waiting_agent", targetAgentId: "agent-2" });
+      expect(kindOf({ agentId: "agent-1" }, "Waiting for the client")).toMatchObject({ kind: "waiting_third_party" });
+      expect(kindOf(undefined)).toMatchObject({ kind: "waiting_agent", targetAgentId: "agent-2" });
+    });
+
+    it("an owner agent that is terminated or not in the company wakes nobody", () => {
+      const gone = [...agents, { id: "agent-9", name: "Old Bot", status: "terminated" }];
+      expect(classify(withOwner({ agentId: "agent-9" }), NOW, { agents: gone })[0]).toMatchObject({ kind: "waiting_third_party", targetAgentId: null });
+      expect(kindOf({ agentId: "nope" })).toMatchObject({ kind: "waiting_third_party", targetAgentId: null });
+    });
+  });
+
   it("keeps waiting_third_party when no agents are given", () => {
     expect(classify(waiting("Waiting for the Tech Lead", 48), NOW)[0]).toMatchObject({ kind: "waiting_third_party", wouldDo: "report" });
   });
 
   it("is wait before actAfterMinutes and wake_other_agent after, recent or not", () => {
-    const at = (minutes: number, hours?: number) => classify(waiting("Tech Lead please review", 0, { updatedAt: new Date(NOW - (hours ? hours * HOUR : minutes * 60_000)).toISOString() }), NOW, { agents })[0]!;
+    const at = (minutes: number, hours?: number) => classify(waiting("Waiting for Tech Lead to review", 0, { updatedAt: new Date(NOW - (hours ? hours * HOUR : minutes * 60_000)).toISOString() }), NOW, { agents })[0]!;
     expect(at(10)).toMatchObject({ kind: "waiting_agent", recent: true, wouldDo: "wait" });
     expect(at(29)).toMatchObject({ wouldDo: "wait" });
     expect(at(30)).toMatchObject({ recent: true, wouldDo: "wake_other_agent" });
     expect(at(0, 48)).toMatchObject({ recent: false, wouldDo: "wake_other_agent" });
-    const custom = (minutes: number) => classify(waiting("Tech Lead please review", 0, { updatedAt: new Date(NOW - minutes * 60_000).toISOString() }), NOW, { agents, actAfterMinutes: 60 })[0]!;
+    const custom = (minutes: number) => classify(waiting("Waiting for Tech Lead to review", 0, { updatedAt: new Date(NOW - minutes * 60_000).toISOString() }), NOW, { agents, actAfterMinutes: 60 })[0]!;
     expect(custom(45).wouldDo).toBe("wait");
     expect(custom(60).wouldDo).toBe("wake_other_agent");
   });

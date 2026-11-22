@@ -102,19 +102,25 @@ function StopperRow({ company, stopper, locale, tr }: { company: CompanySnapshot
   );
 }
 
-/** What was done about a `waiting_agent` stopper: the last wake, a skip or a failure. */
+/** What was done about a `waiting_agent` stopper: the last attempt, a skip or a failure. */
 function NudgeNote({ stopper, locale, tr }: { stopper: StopperView; locale: Locale; tr: ReturnType<typeof useTr>["tr"] }) {
   const nudge = stopper.nudge;
   if (stopper.kind !== "waiting_agent" || !nudge) return null;
   const lines: string[] = [];
   if (nudge.count > 0) {
     const at = Date.parse(nudge.lastAt);
-    lines.push(tr("nudge.woke", { name: nudge.targetAgentName, ago: Number.isNaN(at) ? "?" : formatDuration(locale, Math.max(0, Date.now() - at)), k: nudge.count, max: MAX_NUDGES_PER_STOPPER }));
+    const values = { name: nudge.targetAgentName, ago: Number.isNaN(at) ? "?" : formatDuration(locale, Math.max(0, Date.now() - at)), k: nudge.count, max: MAX_NUDGES_PER_STOPPER };
+    if (nudge.state === "failed") lines.push(tr("nudge.failedAttempt", { ...values, message: nudge.lastError ?? "?" }));
+    else if (nudge.state === "attempted") lines.push(tr("nudge.attempted", values));
+    else lines.push(tr("nudge.woke", values));
     if (nudge.count >= MAX_NUDGES_PER_STOPPER) lines.push(tr("nudge.limit", { max: MAX_NUDGES_PER_STOPPER }));
   }
-  if (nudge.lastError) lines.push(tr("nudge.failed", { message: nudge.lastError }));
-  else if (nudge.lastSkip === "scan_cap") lines.push(tr("nudge.scanCap"));
-  else if (nudge.lastSkip?.startsWith("not_idle:")) lines.push(tr("nudge.notIdle", { name: nudge.targetAgentName, status: nudge.lastSkip.slice("not_idle:".length) }));
+  const name = nudge.targetAgentName;
+  if (nudge.lastSkip === "scan_cap") lines.push(tr("nudge.scanCap"));
+  else if (nudge.lastSkip === "agent_gap") lines.push(tr("nudge.agentGap", { name }));
+  else if (nudge.lastSkip === "agent_day") lines.push(tr("nudge.agentDay", { name }));
+  else if (nudge.lastSkip === "company_day") lines.push(tr("nudge.companyDay"));
+  else if (nudge.lastSkip?.startsWith("not_idle:")) lines.push(tr("nudge.notIdle", { name, status: nudge.lastSkip.slice("not_idle:".length) }));
   return (
     <>
       {lines.map((line) => (
@@ -217,7 +223,7 @@ export function VigilantePage({ context }: PluginPageProps) {
       </div>
 
       <div className="vg-banner" role="note">
-        {tr(data?.act ? "bannerAct" : "banner")}
+        {tr(data ? (data.act ? "bannerAct" : "banner") : "bannerUnknown")}
       </div>
       {data && !data.enabled ? (
         <div className="vg-banner" role="note">

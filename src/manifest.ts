@@ -13,10 +13,13 @@ const manifest: PaperclipPluginManifestV1 = {
   categories: ["automation", "ui"],
   // Watching is the default. The plugin reads issues, companies and agents, keeps
   // one snapshot in its own plugin state, and shows a page. Its only acting
-  // feature is opt-in per company (`act`): it can WAKE an agent (`agents.invoke`)
-  // and write an activity entry (`activity.log.write`). It still has NO
-  // `issues.update`, NO `issues.wakeup`, NO comment capability and NO relation
-  // writes, so it cannot edit issues, comment or change relations. Adding
+  // feature is opt-in per company (`act`): it can WAKE an agent (`agents.invoke`).
+  // It has NO activity-log capability on purpose: the host counts every activity
+  // row toward an issue's last activity, so the plugin's own trail would make a
+  // stuck issue look recently active. Its trail is its page and the woken run.
+  // It also has NO `issues.update`, NO `issues.wakeup`, NO comment capability
+  // and NO relation writes, so it cannot edit issues, comment or change
+  // relations. Adding
   // capabilities makes `plugin upgrade` reject the new manifest: existing
   // installs must uninstall and reinstall the plugin.
   capabilities: [
@@ -31,8 +34,6 @@ const manifest: PaperclipPluginManifestV1 = {
     "agents.read",
     // Acting (opt-in per company): wake the agent another agent is waiting for.
     "agents.invoke",
-    // The trail of each wake, on the issue, attributed to the plugin.
-    "activity.log.write",
     "ui.page.register",
     "ui.sidebar.register",
     // For the top toolbar button: the default "Coordinator" workspace does not draw
@@ -59,7 +60,7 @@ const manifest: PaperclipPluginManifestV1 = {
         type: "boolean",
         title: "Wake the agent another agent is waiting for",
         description:
-          "Off by default (watch-only). When on, and the scan runs for this company, Vigilante wakes the agent named in the explanation of a blocked issue nobody moves, at most once every 24 hours and 3 times per issue, 5 per scan. Nothing else is changed.",
+          "Off by default (watch-only). Only the 15-minute scan acts, never Scan now. When on, Vigilante wakes the agent that a blocked issue nobody moves waits for (the unblock owner, or the agent the explanation names): per issue at most once every 24 hours and 3 times, per agent once an hour and 6 a day, 20 a day for the company, 5 per scan. Nothing else is changed.",
         default: false,
       },
       [CONFIG_ACT_AFTER]: {
@@ -72,7 +73,7 @@ const manifest: PaperclipPluginManifestV1 = {
       [CONFIG_LANGUAGE]: {
         type: "string",
         title: "Language of the wake-up message",
-        description: "Language of the automatic message sent to the woken agent and of the activity entry.",
+        description: "Language of the automatic message sent to the woken agent.",
         enum: ["en", "es"],
         default: "en",
       },
@@ -82,7 +83,7 @@ const manifest: PaperclipPluginManifestV1 = {
     {
       jobKey: JOB_SCAN,
       displayName: "Scan blocked chains",
-      description: "Finds the issues that blocked chains hang from and stores a report. Wakes an agent only for companies with Act on.",
+      description: "Finds the issues that blocked chains hang from and stores a report. The only place that wakes an agent, and only for companies with Act on.",
       schedule: "*/15 * * * *",
     },
   ],
